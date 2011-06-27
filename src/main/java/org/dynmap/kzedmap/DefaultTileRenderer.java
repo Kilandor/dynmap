@@ -11,6 +11,7 @@ import javax.imageio.ImageIO;
 
 import org.bukkit.World;
 import org.bukkit.World.Environment;
+import org.bukkit.block.Biome;
 import org.dynmap.Client;
 import org.dynmap.Color;
 import org.dynmap.ColorScheme;
@@ -18,9 +19,10 @@ import org.dynmap.ConfigurationNode;
 import org.dynmap.MapManager;
 import org.dynmap.TileHashManager;
 import org.dynmap.debug.Debug;
-import org.dynmap.MapChunkCache;
 import org.dynmap.kzedmap.KzedMap.KzedBufferedImage;
 import org.dynmap.utils.FileLockManager;
+import org.dynmap.utils.MapChunkCache;
+import org.dynmap.utils.MapIterator;
 import org.json.simple.JSONObject;
 
 public class DefaultTileRenderer implements MapTileRenderer {
@@ -37,10 +39,16 @@ public class DefaultTileRenderer implements MapTileRenderer {
     protected int   lightscale[];   /* scale skylight level (light = lightscale[skylight] */
     protected boolean night_and_day;    /* If true, render both day (prefix+'-day') and night (prefix) tiles */
     protected boolean transparency; /* Is transparency support active? */
+    public enum BiomeColorOption {
+        NONE, BIOME, TEMPERATURE, RAINFALL
+    }
+    protected BiomeColorOption biomecolored = BiomeColorOption.NONE; /* Use biome for coloring */
     @Override
     public String getName() {
         return name;
     }
+
+    public boolean isNightAndDayEnabled() { return night_and_day; }
 
     public DefaultTileRenderer(ConfigurationNode configuration) {
         this.configuration = configuration;
@@ -80,6 +88,23 @@ public class DefaultTileRenderer implements MapTileRenderer {
         colorScheme = ColorScheme.getScheme((String)configuration.get("colorscheme"));
         night_and_day = configuration.getBoolean("night-and-day", false);
         transparency = configuration.getBoolean("transparency", true);  /* Default on */
+        String biomeopt = configuration.getString("biomecolored", "none");
+        if(biomeopt.equals("biome")) {
+            biomecolored = BiomeColorOption.BIOME;
+        }
+        else if(biomeopt.equals("temperature")) {
+            biomecolored = BiomeColorOption.TEMPERATURE;
+        }
+        else if(biomeopt.equals("rainfall")) {
+            biomecolored = BiomeColorOption.RAINFALL;
+        }
+        else {
+            biomecolored = BiomeColorOption.NONE;
+        }
+    }
+    public boolean isBiomeDataNeeded() { return biomecolored.equals(BiomeColorOption.BIOME); }
+    public boolean isRawBiomeDataNeeded() { 
+        return biomecolored.equals(BiomeColorOption.RAINFALL) || biomecolored.equals(BiomeColorOption.TEMPERATURE);
     }
 
     public boolean render(MapChunkCache cache, KzedMapTile tile, File outputFile) {
@@ -108,7 +133,7 @@ public class DefaultTileRenderer implements MapTileRenderer {
 
         int x, y;
 
-        MapChunkCache.MapIterator mapiter = cache.getIterator(ix, iy, iz);
+        MapIterator mapiter = cache.getIterator(ix, iy, iz);
         
         Color c1 = new Color();
         Color c2 = new Color();
@@ -188,7 +213,7 @@ public class DefaultTileRenderer implements MapTileRenderer {
         }
 
         /* Hand encoding and writing file off to MapManager */
-        KzedZoomedMapTile zmtile = new KzedZoomedMapTile(tile.getWorld(),
+        KzedZoomedMapTile zmtile = new KzedZoomedMapTile(tile.getDynmapWorld(),
                 (KzedMap) tile.getMap(), tile);
         File zoomFile = MapManager.mapman.getTileFile(zmtile);
 
@@ -239,8 +264,10 @@ public class DefaultTileRenderer implements MapTileRenderer {
         int ty = mtile.py/KzedMap.tileHeight;
         if((!fname.exists()) || (crc != hashman.getImageHashCode(mtile.getKey(), null, tx, ty))) {
             Debug.debug("saving image " + fname.getPath());
+            if(!fname.getParentFile().exists())
+                fname.getParentFile().mkdirs();
             try {
-                ImageIO.write(img.buf_img, "png", fname);
+                FileLockManager.imageIOWrite(img.buf_img, "png", fname);
             } catch (IOException e) {
                 Debug.error("Failed to save image: " + fname.getPath(), e);
             } catch (java.lang.NullPointerException e) {
@@ -257,14 +284,17 @@ public class DefaultTileRenderer implements MapTileRenderer {
         mtile.file = fname;
 
         boolean updated_dfname = false;
-        File dfname = new File(fname.getParent(), mtile.getDayFilename());
+        
+        File dfname = new File(mtile.getDynmapWorld().worldtilepath, mtile.getDayFilename());
         if(img_day != null) {
             FileLockManager.getWriteLock(dfname);
             crc = hashman.calculateTileHash(img.argb_buf);
             if((!dfname.exists()) || (crc != hashman.getImageHashCode(mtile.getKey(), "day", tx, ty))) {
                 Debug.debug("saving image " + dfname.getPath());
+                if(!dfname.getParentFile().exists())
+                    dfname.getParentFile().mkdirs();
                 try {
-                    ImageIO.write(img_day.buf_img, "png", dfname);
+                    FileLockManager.imageIOWrite(img_day.buf_img, "png", dfname);
                 } catch (IOException e) {
                     Debug.error("Failed to save image: " + dfname.getPath(), e);
                 } catch (java.lang.NullPointerException e) {
@@ -284,9 +314,10 @@ public class DefaultTileRenderer implements MapTileRenderer {
         boolean ztile_updated = false;
         FileLockManager.getWriteLock(zoomFile);
         if(updated_fname || (!zoomFile.exists())) {
-            saveZoomedTile(zmtile, zoomFile, zimg, ox, oy);
+            saveZoomedTile(zmtile, zoomFile, zimg, ox, oy, null);
             MapManager.mapman.pushUpdate(zmtile.getWorld(),
                                          new Client.Tile(zmtile.getFilename()));
+            zmtile.getDynmapWorld().enqueueZoomOutUpdate(zoomFile);
             ztile_updated = true;
         }
         KzedMap.freeBufferedImage(zimg);
@@ -294,13 +325,14 @@ public class DefaultTileRenderer implements MapTileRenderer {
         MapManager.mapman.updateStatistics(zmtile, null, true, ztile_updated, !rendered);
         
         if(zimg_day != null) {
-            File zoomFile_day = new File(zoomFile.getParent(), zmtile.getDayFilename());
+            File zoomFile_day = new File(zmtile.getDynmapWorld().worldtilepath, zmtile.getDayFilename());
             ztile_updated = false;
             FileLockManager.getWriteLock(zoomFile_day);
             if(updated_dfname || (!zoomFile_day.exists())) {
-                saveZoomedTile(zmtile, zoomFile_day, zimg_day, ox, oy);
+                saveZoomedTile(zmtile, zoomFile_day, zimg_day, ox, oy, "day");
                 MapManager.mapman.pushUpdate(zmtile.getWorld(),
                                              new Client.Tile(zmtile.getDayFilename()));            
+                zmtile.getDynmapWorld().enqueueZoomOutUpdate(zoomFile_day);
                 ztile_updated = true;
             }
             KzedMap.freeBufferedImage(zimg_day);
@@ -310,7 +342,7 @@ public class DefaultTileRenderer implements MapTileRenderer {
     }
 
     private void saveZoomedTile(final KzedZoomedMapTile zmtile, final File zoomFile,
-            final KzedBufferedImage zimg, int ox, int oy) {
+            final KzedBufferedImage zimg, int ox, int oy, String subkey) {
         BufferedImage zIm = null;
         KzedBufferedImage kzIm = null;
         try {
@@ -334,15 +366,18 @@ public class DefaultTileRenderer implements MapTileRenderer {
         zIm.setRGB(ox, oy, KzedMap.tileWidth/2, KzedMap.tileHeight/2, zimg.argb_buf, 0, KzedMap.tileWidth/2);
 
         /* save zoom-out tile */
+        if(!zoomFile.getParentFile().exists())
+            zoomFile.getParentFile().mkdirs();
 
         try {
-            ImageIO.write(zIm, "png", zoomFile);
+            FileLockManager.imageIOWrite(zIm, "png", zoomFile);
             Debug.debug("Saved zoom-out tile at " + zoomFile.getName());
         } catch (IOException e) {
             Debug.error("Failed to save zoom-out tile: " + zoomFile.getName(), e);
         } catch (java.lang.NullPointerException e) {
             Debug.error("Failed to save zoom-out tile (NullPointerException): " + zoomFile.getName(), e);
         }
+
         if(zIm_allocated)
             KzedMap.freeBufferedImage(kzIm);
         else
@@ -350,14 +385,17 @@ public class DefaultTileRenderer implements MapTileRenderer {
 
     }
     protected void scan(World world, int seq, boolean isnether, final Color result, final Color result_day,
-            MapChunkCache.MapIterator mapiter) {
+            MapIterator mapiter) {
         int lightlevel = 15;
         int lightlevel_day = 15;
+        Biome bio = null;
+        double rain = 0.0;
+        double temp = 0.0;
         result.setTransparent();
         if(result_day != null)
             result_day.setTransparent();
         for (;;) {
-            if (mapiter.y < 0) {
+            if (mapiter.getY() < 0) {
                 return;
             }
             int id = mapiter.getBlockTypeID();
@@ -374,10 +412,23 @@ public class DefaultTileRenderer implements MapTileRenderer {
                     isnether = false;
             }
             if(id != 0) {       /* No update needed for air */
-                if(colorScheme.datacolors[id] != null) {    /* If data colored */
-                    data = mapiter.getBlockData();
+                switch(biomecolored) {
+                    case NONE:
+                        if(colorScheme.datacolors[id] != null) {    /* If data colored */
+                            data = mapiter.getBlockData();
+                        }
+                        break;
+                    case BIOME:
+                        bio = mapiter.getBiome();
+                        break;
+                    case RAINFALL:
+                        rain = mapiter.getRawBiomeRainfall();
+                        break;
+                    case TEMPERATURE:
+                        temp = mapiter.getRawBiomeTemperature();
+                        break;
                 }
-                if((shadowscale != null) && (mapiter.y < 127)) {
+                if((shadowscale != null) && (mapiter.getY() < 127)) {
                     /* Find light level of previous chunk */
                     switch(seq) {
                         case 0:
@@ -434,11 +485,25 @@ public class DefaultTileRenderer implements MapTileRenderer {
                     result.setColor(highlightColor);
                     return;
                 }
-                Color[] colors;
-                if(data != 0)
-                    colors = colorScheme.datacolors[id][data];
-                else
-                    colors = colorScheme.colors[id];
+                Color[] colors = null;
+                switch(biomecolored) {
+                    case NONE:
+                        if(data != 0)
+                            colors = colorScheme.datacolors[id][data];
+                        else
+                            colors = colorScheme.colors[id];
+                        break;
+                    case BIOME:
+                        if(bio != null)
+                            colors = colorScheme.biomecolors[bio.ordinal()];
+                        break;
+                    case RAINFALL:
+                        colors = colorScheme.getRainColor(rain);
+                        break;
+                    case TEMPERATURE:
+                        colors = colorScheme.getTempColor(temp);
+                        break;
+                }
                 if (colors != null) {
                     Color c = colors[seq];
                     if (c.getAlpha() > 0) {

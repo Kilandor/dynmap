@@ -22,6 +22,9 @@ public class FilesystemHandler extends FileHandler {
     }
     @Override
     protected InputStream getFileInput(String path, HttpRequest request, HttpResponse response) {
+        if(path == null)
+            return null;
+
         File file = new File(root, path);
         FileLockManager.getReadLock(file);
         try {

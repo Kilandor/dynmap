@@ -1,5 +1,6 @@
 package org.dynmap.kzedmap;
 
+import org.dynmap.DynmapWorld;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.util.ArrayList;
@@ -10,13 +11,13 @@ import java.util.List;
 import java.util.logging.Logger;
 
 import org.bukkit.Location;
-import org.bukkit.World;
 import org.dynmap.ConfigurationNode;
 import org.dynmap.DynmapChunk;
 import org.dynmap.Log;
+import org.dynmap.MapManager;
 import org.dynmap.MapTile;
 import org.dynmap.MapType;
-import org.dynmap.MapChunkCache;
+import org.dynmap.utils.MapChunkCache;
 import org.json.simple.JSONObject;
 import java.awt.image.DataBufferInt;
 import java.awt.image.DataBuffer;
@@ -45,7 +46,6 @@ public class KzedMap extends MapType {
     public static final int anchorz = 0;
     
     MapTileRenderer[] renderers;
-    ZoomedTileRenderer zoomrenderer;
 
     /* BufferedImage with direct access to its ARGB-formatted data buffer */
     public static class KzedBufferedImage {
@@ -62,18 +62,16 @@ public class KzedMap extends MapType {
     private static final int CACHE_LIMIT = 10;
 
     public KzedMap(ConfigurationNode configuration) {
-        Log.info("Loading renderers for map '" + getClass().toString() + "'...");
+        Log.verboseinfo("Loading renderers for map '" + getClass().toString() + "'...");
         List<MapTileRenderer> renderers = configuration.<MapTileRenderer>createInstances("renderers", new Class<?>[0], new Object[0]);
         this.renderers = new MapTileRenderer[renderers.size()];
         renderers.toArray(this.renderers);
-        Log.info("Loaded " + renderers.size() + " renderers for map '" + getClass().toString() + "'.");
-        
-        zoomrenderer = new ZoomedTileRenderer(configuration);
+        Log.verboseinfo("Loaded " + renderers.size() + " renderers for map '" + getClass().toString() + "'.");
     }
 
     @Override
     public MapTile[] getTiles(Location l) {
-        World world = l.getWorld();
+        DynmapWorld world = MapManager.mapman.getWorld(l.getWorld().getName());
 
         int x = l.getBlockX();
         int y = l.getBlockY();
@@ -124,7 +122,7 @@ public class KzedMap extends MapType {
     public MapTile[] getAdjecentTiles(MapTile tile) {
         if (tile instanceof KzedMapTile) {
             KzedMapTile t = (KzedMapTile) tile;
-            World world = tile.getWorld();
+            DynmapWorld world = tile.getDynmapWorld();
             MapTileRenderer renderer = t.renderer;
             return new MapTile[] {
                 new KzedMapTile(world, this, renderer, t.px - tileWidth, t.py),
@@ -135,7 +133,7 @@ public class KzedMap extends MapType {
         return new MapTile[0];
     }
 
-    public void addTile(ArrayList<MapTile> tiles, World world, int px, int py) {
+    public void addTile(ArrayList<MapTile> tiles, DynmapWorld world, int px, int py) {
         for (int i = 0; i < renderers.length; i++) {
             tiles.add(new KzedMapTile(world, this, renderers[i], px, py));
         }
@@ -166,7 +164,7 @@ public class KzedMap extends MapType {
         return false;
     }
     @Override
-    public DynmapChunk[] getRequiredChunks(MapTile tile) {
+    public List<DynmapChunk> getRequiredChunks(MapTile tile) {
         if (tile instanceof KzedMapTile) {
             KzedMapTile t = (KzedMapTile) tile;
 
@@ -218,21 +216,15 @@ public class KzedMap extends MapType {
                     chunks.add(chunk);
                 }
             }
-
-            DynmapChunk[] result = new DynmapChunk[chunks.size()];
-            chunks.toArray(result);
-            return result;
+            return chunks;
         } else {
-            return new DynmapChunk[0];
+            return new ArrayList<DynmapChunk>();
         }
     }
 
     @Override
     public boolean render(MapChunkCache cache, MapTile tile, File outputFile) {
-        if (tile instanceof KzedZoomedMapTile) {
-            zoomrenderer.render(cache, (KzedZoomedMapTile) tile, outputFile);
-            return true;
-        } else if (tile instanceof KzedMapTile) {
+        if (tile instanceof KzedMapTile) {
             return ((KzedMapTile) tile).renderer.render(cache, (KzedMapTile) tile, outputFile);
         }
         return false;
@@ -317,6 +309,40 @@ public class KzedMap extends MapType {
             }
         }
     }    
+
+    public boolean isBiomeDataNeeded() {
+        for(MapTileRenderer r : renderers) {
+           if(r.isBiomeDataNeeded())
+               return true;
+        }
+        return false;
+    }
+
+    public boolean isRawBiomeDataNeeded() { 
+        for(MapTileRenderer r : renderers) {
+            if(r.isRawBiomeDataNeeded())
+                return true;
+         }
+         return false;
+     }
+
+    public List<String> baseZoomFilePrefixes() {
+        ArrayList<String> s = new ArrayList<String>();
+        for(MapTileRenderer r : renderers) {
+            s.add("z" + r.getName());
+            if(r.isNightAndDayEnabled())
+                s.add("z" + r.getName() + "_day");
+        }
+        return s;
+    }
+    /* Return negative to flag negative X walk */
+    public int baseZoomFileStepSize() { return -zTileWidth; }
+
+    private static final int[] stepseq = { 0, 2, 1, 3 };
+    
+    public int[] zoomFileStepSequence() { return stepseq; }
+    /* How many bits of coordinate are shifted off to make big world directory name */
+    public int getBigWorldShift() { return 12; }
 
     public String getName() {
         return "KzedMap";

@@ -9,6 +9,7 @@ components:
     allowwebchat: true
     webchat-interval: 5
     hidewebchatip: false
+    trustclientname: false
   #- class: org.dynmap.JsonFileClientUpdateComponent
   #  writeinterval: 1
   #  sendhealth: true
@@ -60,6 +61,10 @@ components:
   #    strokeWeight: 3
   #    fillColor: "#FF0000"
   #    fillOpacity: 0.35
+  #  # Optional setting to limit which regions to show, by name - if commented out, all regions are shown
+  #  visibleregions:
+  #    - homebase
+  #    - miningsite
   #- class: org.dynmap.TestComponent
   #  stuff: "This is some configuration-value"
 
@@ -69,15 +74,22 @@ display-whitelist: false
 # How often a tile gets rendered (in seconds).
 renderinterval: 1
 
+# Zoom-out tile update period - how often to scan for and process tile updates into zoom-out tiles (in seconds)
+zoomoutperiod: 60
+
 # Tile hashing is used to minimize tile file updates when no changes have occurred - set to false to disable
 enabletilehash: true
 
 render-triggers:
-#  - chunkloaded
-#  - playermove
-#  - playerjoin
+  #- chunkloaded
+  #- playermove
+  #- playerjoin
   - blockplaced
   - blockbreak
+  - snowform
+  - leavesdecay
+  - blockburn
+  - chunkgenerated
 
 # The path where the tile-files are placed.
 tilespath: web/tiles
@@ -96,6 +108,9 @@ disable-webserver: false
 
 # Period between tile renders for fullrender, in seconds (non-zero to pace fullrenders, lessen CPU load)
 timesliceinterval: 0.0
+
+# Maximum chunk loads per server tick (1/20th of a second) - reducing this below 90 will impact render performance, but also will reduce server thread load
+maxchunkspertick: 200
 
 # Interval the browser should poll for updates.
 updaterate: 2000
@@ -121,6 +136,10 @@ templates:
   # Template for normal world
   normal:
     enabled: true
+  #  # If bigworld set to true, use alternate directory layout better suited to large worlds
+  #  bigworld: true
+  #  # Number of extra zoom-out levels for world (each level is twice as big as the previous one)
+  #  extrazoomout: 3
     center:
       x: 0
       y: 64
@@ -131,19 +150,21 @@ templates:
         title: "Flat"
         prefix: flat
         colorscheme: default
-        # To render a world as a "night view", set shadowstrength and ambientlight
-        # shadowstrength: 1.0
-        # ambientlight: 4
-        # To render both night and day versions of tiles (when ambientlight is set), set true
-        # night-and-day: true
-        # Option to turn on transparency support (off by default) - slows render
-        # transparency: true
-        # Background color for map during the day
-        # backgroundday: "#153E7E"
-        # Background color for map during the night
-        # backgroundnight: "#000000"        
-        # Backgrounc color for map (independent of night/day)
-        # background: "#000000"
+        # The textured setting makes the flat render toning much more consistent with the other maps: set to 'none' for the original flat texture, 'smooth' for blended tile top colors, 'dither' for dither pattern
+        textured: smooth
+  #      # To render a world as a "night view", set shadowstrength and ambientlight
+  #      shadowstrength: 1.0
+  #      ambientlight: 4
+  #      # To render both night and day versions of tiles (when ambientlight is set), set true
+  #      night-and-day: true
+  #      # Option to turn on transparency support (off by default) - slows render
+  #      transparency: true
+  #      # Background color for map during the day
+  #      backgroundday: "#153E7E"
+  #      # Background color for map during the night
+  #      backgroundnight: "#000000"        
+  #      # Background color for map (independent of night/day)
+  #      background: "#000000"
       - class: org.dynmap.kzedmap.KzedMap
         renderers:
           - class: org.dynmap.kzedmap.DefaultTileRenderer
@@ -152,30 +173,39 @@ templates:
             prefix: t
             maximumheight: 127
             colorscheme: default
-            # Add shadows to world (based on top-down shadows from chunk data)
-            # shadowstrength: 1.0
-            # To render a world as a "night view", set shadowstrength and ambientlight
-            # ambientlight: 4
-            # To render both night and day versions of tiles (when ambientlight is set), set true
-            # night-and-day: true
-            # Option to turn off transparency support (on by default) - speeds render
-            # transparency: false
-            # Background color for map during the day
-            # backgroundday: "#153E7E"
-            # Background color for map during the night
-            # backgroundnight: "#000000"        
-            # Backgrounc color for map (independent of night/day)
-            # background: "#000000"
-            # Sets the icon to 'images/block_custom.png'
-            # icon: custom
-          #- class: org.dynmap.kzedmap.HighlightTileRenderer
-          #  prefix: ht
-          #  maximumheight: 127
-          #  colorscheme: default
-          #  highlight: # For highlighting multiple block-types.
-          #    - 56 # Highlight diamond-ore
-          #    - 66 # Highlight minecart track
-          #  highlight: 56 # For highlighting a single block-type.
+  #          # Add shadows to world (based on top-down shadows from chunk data)
+  #          shadowstrength: 1.0
+  #          # To render a world as a "night view", set shadowstrength and ambientlight
+  #          ambientlight: 4
+  #          # To render both night and day versions of tiles (when ambientlight is set), set true
+  #          night-and-day: true
+  #          # Option to turn off transparency support (on by default) - speeds render
+  #          transparency: false
+  #          # Background color for map during the day
+  #          backgroundday: "#153E7E"
+  #          # Background color for map during the night
+  #          backgroundnight: "#000000"        
+  #          # Background color for map (independent of night/day)
+  #          background: "#000000"
+  #          # Sets the icon to 'images/block_custom.png'
+  #          icon: custom
+  #          # Biome-based mapping
+  #        - class: org.dynmap.kzedmap.DefaultTileRenderer
+  #          name: biome
+  #          title: "Biome"
+  #          prefix: b
+  #          maximumheight: 127
+  #          colorscheme: default
+  #          # Biome-based coloring : biome=biome type, temperature=biome-temperature, rainfall=biome-rainfall
+  #          biomecolored: biome
+  #        - class: org.dynmap.kzedmap.HighlightTileRenderer
+  #          prefix: ht
+  #          maximumheight: 127
+  #          colorscheme: default
+  #          highlight: # For highlighting multiple block-types.
+  #            - 56 # Highlight diamond-ore
+  #            - 66 # Highlight minecart track
+  #          highlight: 56 # For highlighting a single block-type.
           - class: org.dynmap.kzedmap.CaveTileRenderer
             name: cave
             title: "Cave"
@@ -184,6 +214,10 @@ templates:
   # Nether world template
   nether:
     enabled: true
+  #  # If bigworld set to true, use alternate directory layout better suited to large worlds
+  #  bigworld: true
+  #  # Number of extra zoom-out levels for world (each level is twice as big as the previous one)
+  #  extrazoomout: 3
     center:
       x: 0
       y: 64
@@ -196,6 +230,8 @@ templates:
         colorscheme: default
         # Map background color (day or night)
         background: "#300806"
+        # The textured setting makes the flat render toning much more consistent with the other maps: set to 'none' for the original flat texture, 'smooth' for blended tile top colors, 'dither' for dither pattern
+        textured: smooth
       - class: org.dynmap.kzedmap.KzedMap
         renderers:
           - class: org.dynmap.kzedmap.DefaultTileRenderer
@@ -209,6 +245,10 @@ templates:
   # Skylands world template
   skylands:
     enabled: true
+  #  # If bigworld set to true, use alternate directory layout better suited to large worlds
+  #  bigworld: true
+  #  # Number of extra zoom-out levels for world (each level is twice as big as the previous one)
+  #  extrazoomout: 3
     center:
       x: 0
       y: 64
@@ -223,6 +263,8 @@ templates:
         backgroundday: "#153E7E"
         # Background color for map during the night
         backgroundnight: "#000000"        
+        # The textured setting makes the flat render toning much more consistent with the other maps: set to 'none' for the original flat texture, 'smooth' for blended tile top colors, 'dither' for dither pattern
+        textured: smooth
       - class: org.dynmap.kzedmap.KzedMap
         renderers:
           - class: org.dynmap.kzedmap.DefaultTileRenderer
@@ -260,6 +302,22 @@ worlds:
   #    - x: -15000
   #      y: 64
   #      z: -5000
+  #  # Use visibilitylimits to restrict which areas of maps on your world to render (zero or more rectangles can be defined)
+  #  visibilitylimits:
+  #    - x0: -1000
+  #      z0: -1000
+  #      x1: 1000
+  #      z1: 1000
+  #    - x0: -2000
+  #      z0: -1000
+  #      x1: -1000
+  #      z1: -500
+  #  # Use hidestyle to control how hidden-but-existing chunks are to be rendered (air=empty air (same as ungenerated), stone=a flat stone plain, ocean=a flat ocean)
+  #  hidestyle: stone
+  #  # Use 'autogenerate-to-visibilitylimits: true' to choose to force the generation of ungenerated chunks while rendering maps on this world, for any chunks within the defined
+  #  # visibilitylimits (limits must be set).  The three options here are: none (default - no autogenerate), map-only (temporarily generate chunks for map, but don't save them (no world change),
+  #  # permanent (generate and save chunks - this permanently adds the chunks to the world, as if a player had visited them - BE SURE THIS IS WHAT YOU WANT)
+  #  autogenerate-to-visibilitylimits: map-only
   #   Use 'template: mycustomtemplate' to use the properties specified in the template 'mycustomtemplate' to this world. Default it is set to the environment-name (normal or nether).
   #  template: mycustomtemplate
   #   Rest of comes from template - uncomment to tailor for world specifically
@@ -267,25 +325,31 @@ worlds:
   #    x: 0
   #    y: 64
   #    z: 0
+  #  # If bigworld set to true, use alternate directory layout better suited to large worlds
+  #  bigworld: true
+  #  # Number of extra zoom-out levels for world (each level is twice as big as the previous one)
+  #  extrazoomout: 3
   #  maps:
   #    - class: org.dynmap.flat.FlatMap
   #      name: flat
   #      title: "Flat"
   #      prefix: flat
   #      colorscheme: default
+  #      # The textured setting makes the flat render toning much more consistent with the other maps: set to 'none' for the original flat texture, 'smooth' for blended tile top colors, 'dither' for dither pattern
+  #      textured: smooth
   #      # To render a world as a "night view", set shadowstrength and ambientlight
-  #      # shadowstrength: 1.0
-  #      # ambientlight: 4
+  #      shadowstrength: 1.0
+  #      ambientlight: 4
   #      # To render both night and day versions of tiles (when ambientlight is set), set true
-  #      # night-and-day: true
+  #      night-and-day: true
   #      # Option to turn on transparency support (off by default) - slows render
-  #      # transparency: true
+  #      transparency: true
   #      # Background color for map during the day
-  #      # backgroundday: "#153E7E"
+  #      backgroundday: "#153E7E"
   #      # Background color for map during the night
-  #      # backgroundnight: "#000000"        
+  #      backgroundnight: "#000000"        
   #      # Backgrounc color for map (independent of night/day)
-  #      # background: "#000000"
+  #      background: "#000000"
   #    - class: org.dynmap.kzedmap.KzedMap
   #      renderers:
   #        - class: org.dynmap.kzedmap.DefaultTileRenderer
@@ -295,29 +359,29 @@ worlds:
   #          maximumheight: 127
   #          colorscheme: default
   #          # Add shadows to world (based on top-down shadows from chunk data)
-  #          # shadowstrength: 1.0
+  #          shadowstrength: 1.0
   #          # To render a world as a "night view", set shadowstrength and ambientlight
-  #          # ambientlight: 4
+  #          ambientlight: 4
   #          # To render both night and day versions of tiles (when ambientlight is set), set true
-  #          # night-and-day: true
+  #          night-and-day: true
   #          # Option to turn off transparency support (on by default) - speeds render
-  #          # transparency: false
+  #          transparency: false
   #          # Background color for map during the day
-  #          # backgroundday: "#153E7E"
+  #          backgroundday: "#153E7E"
   #          # Background color for map during the night
-  #          # backgroundnight: "#000000"        
+  #          backgroundnight: "#000000"        
   #          # Backgrounc color for map (independent of night/day)
-  #          # background: "#000000"
+  #          background: "#000000"
   #          # Sets the icon to 'images/block_custom.png'
-  #          # icon: custom
-  #        #- class: org.dynmap.kzedmap.HighlightTileRenderer
-  #        #  prefix: ht
-  #        #  maximumheight: 127
-  #        #  colorscheme: default
-  #        #  highlight: # For highlighting multiple block-types.
-  #        #    - 56 # Highlight diamond-ore
-  #        #    - 66 # Highlight minecart track
-  #        #  highlight: 56 # For highlighting a single block-type.
+  #          icon: custom
+  #        - class: org.dynmap.kzedmap.HighlightTileRenderer
+  #          prefix: ht
+  #          maximumheight: 127
+  #          colorscheme: default
+  #          highlight: # For highlighting multiple block-types.
+  #            - 56 # Highlight diamond-ore
+  #            - 66 # Highlight minecart track
+  #          highlight: 56 # For highlighting a single block-type.
   #        - class: org.dynmap.kzedmap.CaveTileRenderer
   #          name: cave
   #          title: "Cave"
@@ -334,12 +398,16 @@ worlds:
   #    x: 0
   #    y: 64
   #    z: 0
+  #  # Number of extra zoom-out levels for world (each level is twice as big as the previous one)
+  #  extrazoomout: 3
   #  maps:
   #    - class: org.dynmap.flat.FlatMap
   #      name: flat
   #      title: "Flat"
   #      prefix: flat
   #      colorscheme: default
+  #      # The textured setting makes the flat render toning much more consistent with the other maps: set to 'none' for the original flat texture, 'smooth' for blended tile top colors, 'dither' for dither pattern
+  #      textured: smooth
   #    - class: org.dynmap.kzedmap.KzedMap
   #      renderers:
   #        - class: org.dynmap.kzedmap.DefaultTileRenderer
@@ -348,6 +416,10 @@ worlds:
   #          prefix: nt
   #          maximumheight: 127
   #          colorscheme: default
+
+# Set to true to enable verbose startup messages - can help with debugging map configuration problems
+# Set to false for a much quieter startup log
+verbose: true
 
 # Enables debugging.
 #debuggers:

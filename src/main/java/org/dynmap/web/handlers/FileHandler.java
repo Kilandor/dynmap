@@ -6,18 +6,14 @@ import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Map;
-import java.util.logging.Logger;
 
 import org.dynmap.web.HttpField;
 import org.dynmap.web.HttpHandler;
 import org.dynmap.web.HttpRequest;
 import org.dynmap.web.HttpResponse;
 import org.dynmap.web.HttpStatus;
-import org.dynmap.utils.FileLockManager;
 
 public abstract class FileHandler implements HttpHandler {
-    protected static final Logger log = Logger.getLogger("Minecraft");
-    protected static final String LOG_PREFIX = "[dynmap] ";
     //BUG-this breaks re-entrancy of this handler, which is called from multiple threads (one per request)
     //private byte[] readBuffer = new byte[40960];
     //Replace with pool of buffers
@@ -60,7 +56,7 @@ public abstract class FileHandler implements HttpHandler {
         if (qmark >= 0)
             path = path.substring(0, qmark);
 
-        if (path.startsWith("/") || path.startsWith("."))
+        if (path.startsWith("/") || path.startsWith(".") || path.contains(".."))
             return null;
         if (path.length() == 0)
             path = getDefaultFilename(path);

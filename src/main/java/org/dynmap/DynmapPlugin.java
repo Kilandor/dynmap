@@ -18,8 +18,11 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockBurnEvent;
 import org.bukkit.event.block.BlockListener;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.block.LeavesDecayEvent;
+import org.bukkit.event.block.SnowFormEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerListener;
 import org.bukkit.event.player.PlayerMoveEvent;
@@ -49,6 +52,8 @@ public class DynmapPlugin extends JavaPlugin {
     public Events events = new Events();
     /* Flag to let code know that we're doing reload - make sure we don't double-register event handlers */
     public boolean is_reload = false;
+    private boolean generate_only = false;
+    private static boolean ignore_chunk_loads = false; /* Flat to keep us from processing our own chunk loads */
 
     public static File dataDirectory;
     public static File tilesDirectory;
@@ -72,6 +77,8 @@ public class DynmapPlugin extends JavaPlugin {
         org.bukkit.util.config.Configuration bukkitConfiguration = new org.bukkit.util.config.Configuration(new File(this.getDataFolder(), "configuration.txt"));
         bukkitConfiguration.load();
         configuration = new ConfigurationNode(bukkitConfiguration);
+        
+        Log.verbose = configuration.getBoolean("verbose", true);
         
         loadDebuggers();
 
@@ -101,7 +108,7 @@ public class DynmapPlugin extends JavaPlugin {
         for(Component component : configuration.<Component>createInstances("components", new Class<?>[] { DynmapPlugin.class }, new Object[] { this })) {
             componentManager.add(component);
         }
-        Log.info("Loaded " + componentManager.components.size() + " components.");
+        Log.verboseinfo("Loaded " + componentManager.components.size() + " components.");
 
         registerEvents();
 
@@ -180,11 +187,35 @@ public class DynmapPlugin extends JavaPlugin {
             BlockListener renderTrigger = new BlockListener() {
                 @Override
                 public void onBlockPlace(BlockPlaceEvent event) {
+                    if(event.isCancelled())
+                        return;
                     mm.touch(event.getBlockPlaced().getLocation());
                 }
 
                 @Override
                 public void onBlockBreak(BlockBreakEvent event) {
+                    if(event.isCancelled())
+                        return;
+                    mm.touch(event.getBlock().getLocation());
+                }
+                @Override
+                public void onSnowForm(SnowFormEvent event) {
+                    if(event.isCancelled())
+                        return;
+                    mm.touch(event.getBlock().getLocation());        
+                }
+
+                @Override
+                public void onLeavesDecay(LeavesDecayEvent event) {
+                    if(event.isCancelled())
+                        return;
+                    mm.touch(event.getBlock().getLocation());                
+                }
+                
+                @Override
+                public void onBlockBurn(BlockBurnEvent event) {
+                    if(event.isCancelled())
+                        return;
                     mm.touch(event.getBlock().getLocation());
                 }
             };
@@ -192,6 +223,12 @@ public class DynmapPlugin extends JavaPlugin {
                 pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_PLACE, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
             if (isTrigger("blockbreak"))
                 pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_BREAK, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            if (isTrigger("snowform"))
+                pm.registerEvent(org.bukkit.event.Event.Type.SNOW_FORM, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            if (isTrigger("leavesdecay"))
+                pm.registerEvent(org.bukkit.event.Event.Type.LEAVES_DECAY, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            if (isTrigger("blockburn"))
+                pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_BURN, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
         }
         {
             PlayerListener renderTrigger = new PlayerListener() {
@@ -214,21 +251,46 @@ public class DynmapPlugin extends JavaPlugin {
             WorldListener renderTrigger = new WorldListener() {
                 @Override
                 public void onChunkLoad(ChunkLoadEvent event) {
-                    int x = event.getChunk().getX() * 16 + 8;
-                    int z = event.getChunk().getZ() * 16 + 8;
-                    mm.touch(new Location(event.getWorld(), x, 127, z));
+                    if(ignore_chunk_loads)
+                        return;
+                    if(generate_only) {
+                        if(!isNewChunk(event))
+                            return;
+                        /* Touch extreme corners */
+                        int x = event.getChunk().getX() * 16;
+                        int z = event.getChunk().getZ() * 16;
+                        mm.touch(new Location(event.getWorld(), x, 0, z));
+                        mm.touch(new Location(event.getWorld(), x+15, 127, z));
+                        mm.touch(new Location(event.getWorld(), x+15, 0, z+15));
+                        mm.touch(new Location(event.getWorld(), x, 127, z+15));
+                    }
+                    else {
+                        int x = event.getChunk().getX() * 16 + 8;
+                        int z = event.getChunk().getZ() * 16 + 8;
+                        mm.touch(new Location(event.getWorld(), x, 127, z));
+                    }
                 }
-
-                /*
-                 * @Override public void onChunkGenerated(ChunkLoadEvent event)
-                 * { int x = event.getChunk().getX() * 16 + 8; int z =
-                 * event.getChunk().getZ() * 16 + 8; mm.touch(new
-                 * Location(event.getWorld(), x, 127, z)); }
-                 */
+                private boolean isNewChunk(ChunkLoadEvent event) {
+                    return event.isNewChunk();
+                }
             };
-            if (isTrigger("chunkloaded"))
+            boolean ongenerate = isTrigger("chunkgenerated");
+            if(ongenerate) {
+                try {   /* Test if new enough bukkit to allow this */
+                    ChunkLoadEvent.class.getDeclaredMethod("isNewChunk", new Class[0]);
+                } catch (NoSuchMethodException nsmx) {
+                    Log.info("Warning: CraftBukkit build does not support function needed for 'chunkgenerated' trigger - disabling");
+                    ongenerate = false;
+                }
+            }
+            if(isTrigger("chunkloaded")) {
+                generate_only = false;
                 pm.registerEvent(org.bukkit.event.Event.Type.CHUNK_LOAD, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
-            //if (isTrigger("chunkgenerated")) pm.registerEvent(Event.Type.CHUNK_GENERATED, renderTrigger, Priority.Monitor, this);
+            }
+            else if(ongenerate) {
+                generate_only = true;
+                pm.registerEvent(org.bukkit.event.Event.Type.CHUNK_LOAD, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            }
         }
 
         // To link configuration to real loaded worlds.
@@ -330,14 +392,14 @@ public class DynmapPlugin extends JavaPlugin {
                     for (int i = 1; i < args.length; i++) {
                         World w = getServer().getWorld(args[i]);
                         if(w != null)
-                            mapManager.renderFullWorld(new Location(w, 0, 0, 0));
+                            mapManager.renderFullWorld(new Location(w, 0, 0, 0),sender);
                         else
                             sender.sendMessage("World '" + args[i] + "' not defined/loaded");
                     }
                 } else if (player != null) {
                     Location loc = player.getLocation();
                     if(loc != null)
-                        mapManager.renderFullWorld(loc);
+                        mapManager.renderFullWorld(loc, sender);
                 } else {
                     sender.sendMessage("World name is required");
                 }
@@ -396,9 +458,9 @@ public class DynmapPlugin extends JavaPlugin {
         finalConfiguration.extend(templateConfiguration);
         finalConfiguration.extend(worldConfiguration);
         
-        Log.info("Configuration of world " + world.getName());
+        Log.verboseinfo("Configuration of world " + world.getName());
         for(Map.Entry<String, Object> e : finalConfiguration.entrySet()) {
-            Log.info(e.getKey() + ": " + e.getValue());
+            Log.verboseinfo(e.getKey() + ": " + e.getValue());
         }
         
         return finalConfiguration;
@@ -407,7 +469,7 @@ public class DynmapPlugin extends JavaPlugin {
     private ConfigurationNode getDefaultTemplateConfigurationNode(World world) {
         Environment environment = world.getEnvironment();
         String environmentName = environment.name().toLowerCase();
-        Log.info("Using environment as template: " + environmentName);
+        Log.verboseinfo("Using environment as template: " + environmentName);
         return getTemplateConfigurationNode(environmentName);
     }
     
@@ -432,5 +494,13 @@ public class DynmapPlugin extends JavaPlugin {
         PluginManager pluginManager = getServer().getPluginManager();
         pluginManager.disablePlugin(this);
         pluginManager.enablePlugin(this);
+    }
+    
+    public String getWebPath() {
+        return configuration.getString("webpath", "web");
+    }
+    
+    public static void setIgnoreChunkLoads(boolean ignore) {
+        ignore_chunk_loads = ignore;
     }
 }
