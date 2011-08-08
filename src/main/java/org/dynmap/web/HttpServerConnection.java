@@ -19,13 +19,14 @@ import java.net.InetSocketAddress;
 
 public class HttpServerConnection extends Thread {
     protected static final Logger log = Logger.getLogger("Minecraft");
-    protected static final String LOG_PREFIX = "[dynmap] ";
 
     private static Pattern requestHeaderLine = Pattern.compile("^(\\S+)\\s+(\\S+)\\s+HTTP/(.+)$");
     private static Pattern requestHeaderField = Pattern.compile("^([^:]+):\\s*(.+)$");
 
     private Socket socket;
     private HttpServer server;
+    private boolean do_shutdown;
+    private boolean can_keepalive;
 
     private PrintStream printOut;
     private StringWriter sw = new StringWriter();
@@ -35,6 +36,8 @@ public class HttpServerConnection extends Thread {
     public HttpServerConnection(Socket socket, HttpServer server) {
         this.socket = socket;
         this.server = server;
+        do_shutdown = false;
+        can_keepalive = false;
     }
 
     private final static void readLine(InputStream in, StringWriter sw) throws IOException {
@@ -115,7 +118,7 @@ public class HttpServerConnection extends Thread {
     public final void writeResponseHeader(HttpResponse response) throws IOException {
         writeResponseHeader(printOut, response);
     }
-
+    
     public void run() {
         try {
             if (socket == null)
@@ -128,10 +131,14 @@ public class HttpServerConnection extends Thread {
 
             printOut = new PrintStream(out, false);
             while (true) {
+            	/* Check for start of each request - kicks out persistent connections */
+                if(server.checkForBannedIp(rmtaddr)) {
+                	return;
+                }
+                
                 HttpRequest request = new HttpRequest();
                 request.rmtaddr = rmtaddr;
                 if (!readRequestHeader(in, request)) {
-                    socket.close();
                     return;
                 }
 
@@ -150,6 +157,13 @@ public class HttpServerConnection extends Thread {
                             request.body = in;
                         }
                     }
+                }
+                boolean iskeepalive = false;
+                String keepalive = request.fields.get(HttpField.Connection);
+                if((keepalive != null) && (keepalive.toLowerCase().indexOf("keep-alive") >= 0)) {
+                    /* See if we're clear to do keepalive */
+                    if(!iskeepalive)
+                        iskeepalive = server.canKeepAlive(this);
                 }
 
                 // TODO: Optimize HttpHandler-finding by using a real path-aware tree.
@@ -174,22 +188,25 @@ public class HttpServerConnection extends Thread {
                 }
 
                 if (handler == null) {
-                    socket.close();
                     return;
                 }
 
                 HttpResponse response = new HttpResponse(this, out);
 
+                if(iskeepalive) {
+                    response.fields.put(HttpField.Connection, "keep-alive");
+                    response.fields.put("Keep-Alive", "timeout=5");
+                }
+                else {
+                    response.fields.put(HttpField.Connection, "close");
+                }
                 try {
                     handler.handle(relativePath, request, response);
                 } catch (IOException e) {
                     throw e;
                 } catch (Exception e) {
                     Log.severe("HttpHandler '" + handler + "' has thown an exception", e);
-                    if (socket != null) {
-                        out.flush();
-                        socket.close();
-                    }
+                    out.flush();
                     return;
                 }
 
@@ -199,8 +216,7 @@ public class HttpServerConnection extends Thread {
                     //return;
                 }
 
-                boolean isKeepalive = !"close".equals(request.fields.get(HttpField.Connection)) && !"close".equals(response.fields.get(HttpField.Connection));
-
+                boolean isKeepalive = iskeepalive && !"close".equals(request.fields.get(HttpField.Connection)) && !"close".equals(response.fields.get(HttpField.Connection));
                 String contentLength = response.fields.get("Content-Length");
                 if (isKeepalive && contentLength == null) {
                     // A handler has been a bad boy, but we're here to fix it.
@@ -211,37 +227,42 @@ public class HttpServerConnection extends Thread {
                     if (responseBody == null) {
                         Debug.debug("Response was given without Content-Length by '" + handler + "' for path '" + request.path + "'.");
                         out.flush();
-                        socket.close();
                         return;
                     }
                 }
 
+                out.flush();
+
                 if (!isKeepalive) {
-                    out.flush();
-                    socket.close();
                     return;
                 }
-
-                out.flush();
             }
         } catch (IOException e) {
-            if (socket != null) {
-                try {
-                    socket.close();
-                } catch (IOException ex) {
-                }
-            }
-            return;
+
         } catch (Exception e) {
+            if(!do_shutdown) {
+                Log.severe("Exception while handling request: ", e);
+                e.printStackTrace();
+            }
+        } finally {
             if (socket != null) {
                 try {
                     socket.close();
                 } catch (IOException ex) {
                 }
             }
-            Log.severe("Exception while handling request: ", e);
-            e.printStackTrace();
-            return;
+            server.connectionEnded(this);
+        }
+    }
+    public void shutdownConnection() {
+        try {
+            do_shutdown = true;
+            if(socket != null) {
+                socket.close();
+            }
+            join(); /* Wait for thread to die */
+        } catch (IOException iox) {
+        } catch (InterruptedException ix) {
         }
     }
 }

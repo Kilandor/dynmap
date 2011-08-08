@@ -24,10 +24,11 @@
       <outputDirectory>/dynmap/colorschemes</outputDirectory>
     </fileSet>
     <fileSet>
-    	<directory>${project.basedir}</directory>
-    	<outputDirectory>/dynmap/</outputDirectory>
-    	<includes>
-    		<include>configuration.txt</include></includes></fileSet>
+    	<directory>${project.basedir}/texturepacks</directory>
+    	<outputDirectory>/dynmap/texturepacks</outputDirectory></fileSet>
+    <fileSet>
+    	<directory>${project.basedir}/renderdata</directory>
+    	<outputDirectory>/dynmap/renderdata</outputDirectory></fileSet>
   </fileSets>
   <files>
   	<file>

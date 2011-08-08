@@ -1,128 +1,63 @@
-function KzedProjection() {}
-KzedProjection.prototype = {
-		extrazoom: 0,
-		fromLatLngToPoint: function(latLng) {
-			var x = latLng.lng() * config.tileWidth;
-			var y = latLng.lat() * config.tileHeight;
+var KzedProjection = DynmapProjection.extend({
+	fromLocationToLatLng: function(location) {
+		var dx = location.x;
+		var dy = location.y - 127;
+		var dz = location.z;
+		var px = dx + dz;
+		var py = dx - dz - dy;
+		var scale = 1 << this.options.mapzoomout;
 
-			return new google.maps.Point(x, y);
-		},
-		fromPointToLatLng: function(point) {
-			var lng = point.x / config.tileWidth;
-			var lat = point.y / config.tileHeight;
-			return new google.maps.LatLng(lat, lng);
-		},
-		fromWorldToLatLng: function(x, y, z)
-		{
-			var dx = +x;
-			var dy = +y - 127;
-			var dz = +z;
-			var px = dx + dz;
-			var py = dx - dz - dy;
-			var scale = 2 << this.extrazoom;
-
-			var lng = -px / config.tileWidth / scale + (1.0 / scale);
-			var lat = py / config.tileHeight / scale;
-
-			return new google.maps.LatLng(lat, lng);
-		}
-};
-
-function KzedMapType(configuration) { $.extend(this, configuration); }
-KzedMapType.prototype = $.extend(new DynMapType(), {
-	constructor: KzedMapType,
-	projection: new KzedProjection(),
-	tileSize: new google.maps.Size(128, 128),
-	minZoom: 0,
-	maxZoom: 3,
-	prefix: null,
-	getTile: function(coord, zoom, doc) {
-		var tileDebugText = null;
-		var tileSize = 128;
-		var tileName;
-		var imgSize;
-		
-		var debugred;
-		var debugblue;
-		
-        var dnprefix = '';
-        if(this.dynmap.map.mapTypes[this.dynmap.map.mapTypeId].nightandday && this.dynmap.serverday)
-            dnprefix = '_day';
-		var extrazoom = this.dynmap.world.extrazoomout;        
-		if (zoom <= extrazoom) {
-			var zpre = 'zzzzzzzzzzzzzzzz'.substring(0, extrazoom-zoom);
-			// Most zoomed out tiles.
-			tileSize = 128;
-			imgSize = tileSize;
-			var tilescale = 2 << (extrazoom-zoom);
-            if (this.dynmap.world.bigworld) {
-                if(zoom < extrazoom) zpre = zpre + '_';
-                tileName = 'z' + this.prefix + dnprefix + '/' + ((-coord.x * tileSize*tilescale)>>12) + 
-                    '_' + ((coord.y * tileSize*tilescale) >> 12) + '/' + zpre +
-                    (-coord.x * tileSize*tilescale) + '_' + (coord.y * tileSize*tilescale) + '.png';
-            }
-            else {
-                tileName = zpre + 'z' + this.prefix + dnprefix + '_' + (-coord.x * tileSize*tilescale) + '_' + (coord.y * tileSize*tilescale) + '.png';
-            }
-		} else {
-			// Other zoom levels.
-			tileSize = 128;
-
-			imgSize = Math.pow(2, 6+zoom-extrazoom);
-            if(this.dynmap.world.bigworld) {
-                tileName = this.prefix + dnprefix + '/' + ((-coord.x*tileSize) >> 12) + '_' +
-                    ((coord.y*tileSize)>>12) + '/' + 
-                    (-coord.x*tileSize) + '_' + (coord.y*tileSize) + '.png';
-            }
-            else {
-                tileName = this.prefix + dnprefix + '_' + (-coord.x*tileSize) + '_' + (coord.y*tileSize) + '.png';
-            }
-		}
-		var img;
-		var tile = $('<div/>')
-			.addClass('tile')
-			.css({
-				width: tileSize + 'px',
-				height: tileSize + 'px'
-			});
-		if (tileDebugText) {
-			$('<span/>')
-				.text(tileDebugText)
-				.css({
-					position: 'absolute',
-					color: 'red'
-				})
-				.appendTo(tile);
-		}
-		if (tileName) {
-			img = $('<img/>')
-				.attr('src', this.dynmap.getTileUrl(tileName))
-				.error(function() { img.hide(); })
-				.bind('load', function() { img.show(); })
-				.css({
-					width: imgSize + 'px',
-					height: imgSize + 'px',
-					borderStyle: 'none'
-				})
-				.hide()
-				.appendTo(tile);
-			this.dynmap.registerTile(this, tileName, img);
-		} else {
-			this.dynmap.unregisterTile(this, tileName);
-		}
-		return tile.get(0);
+		var xx = (128 - px) / scale;
+		var yy = py / scale;
+		return new L.LatLng(xx, yy, true);
 	},
-	updateTileSize: function(zoom) {
-		var size;
-		var extrazoom = this.dynmap.world.extrazoomout;
-		this.projection.extrazoom = extrazoom;
-		this.maxZoom = 3 + extrazoom;
-		if (zoom <= extrazoom) {
-			size = 128;
-		} else {
-			size = Math.pow(2, 6+zoom-extrazoom);
-		}
-		this.tileSize = new google.maps.Size(size, size);
+	fromLatLngToLocation: function(latlon, y) {
+		var scale = 1 << this.options.mapzoomout;
+		var px = 128 - (latlon.lat * scale);
+		var py = latlon.lng * scale;
+		var x = (px + py + (y-127))/2;
+		var z = (px - x);
+		return { x: x, y: y, z: z };
+	}
+	
+});
+
+var KzedMapType = DynmapTileLayer.extend({
+	options: {
+		minZoom: 0,
+		maxZoom: 4,
+		errorTileUrl: 'images/blank.png'
+	},
+	initialize: function(options) {
+		options.maxZoom = options.mapzoomin + options.mapzoomout;
+		L.Util.setOptions(this, options);
+		this.projection = new KzedProjection({mapzoomout: this.options.mapzoomout});
+	},
+	getTileName: function(tilePoint, zoom) {
+		var info = this.getTileInfo(tilePoint, zoom);
+		return namedReplace(this.options.bigmap
+				? '{zprefix}{nightday}/{scaledx}_{scaledy}/{zoomprefix}{x}_{y}.png'
+				: '{zoom}{prefix}{nightday}_{x}_{y}.png'
+				, this.getTileInfo(tilePoint, zoom));
+	},
+	getTileInfo: function(tilePoint, zoom) {
+		// Custom tile-info-calculation for KzedMap: *128 and >>12
+		var izoom = this.options.maxZoom - zoom;
+		var zoomoutlevel = Math.max(0, izoom - this.options.mapzoomin);
+		var scale = 1 << zoomoutlevel;
+		var x = -scale*tilePoint.x*128;
+		var y = scale*tilePoint.y*128;
+		return {
+			prefix: this.options.prefix,
+			nightday: (this.options.nightandday && this.options.dynmap.serverday) ? '_day' : '',
+			scaledx: x >> 12,
+			scaledy: y >> 12,
+			zoom: this.zoomprefix(zoomoutlevel),
+			zoomprefix: (zoomoutlevel<2)?"":(this.zoomprefix(zoomoutlevel-1)+"_"),
+			zprefix: (zoomoutlevel==0)?this.options.prefix:("z"+this.options.prefix),
+			x: x,
+			y: y
+		};
 	}
 });
 

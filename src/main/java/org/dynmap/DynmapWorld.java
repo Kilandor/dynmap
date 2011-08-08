@@ -7,7 +7,7 @@ import org.bukkit.World;
 import org.bukkit.Location;
 import org.dynmap.debug.Debug;
 import org.dynmap.kzedmap.KzedMap;
-import org.dynmap.kzedmap.KzedMap.KzedBufferedImage;
+import org.dynmap.utils.DynmapBufferedImage;
 import org.dynmap.utils.FileLockManager;
 import org.dynmap.utils.MapChunkCache;
 
@@ -41,8 +41,10 @@ public class DynmapWorld {
     private int extrazoomoutlevels;  /* Number of additional zoom out levels to generate */
     public File worldtilepath;
     private Object lock = new Object();
-    private HashSet<String> zoomoutupdates[];
+    @SuppressWarnings("unchecked")
+    private HashSet<String> zoomoutupdates[] = new HashSet[0];
     private boolean checkts = true;	/* Check timestamps on first run with new configuration */
+    private boolean cancelled;
     
     @SuppressWarnings("unchecked")
     public void setExtraZoomOutLevels(int lvl) {
@@ -59,18 +61,36 @@ public class DynmapWorld {
     }
     
     private void enqueueZoomOutUpdate(File f, int level) {
-        if(level >= extrazoomoutlevels)
-            return;
         synchronized(lock) {
+            if(level >= zoomoutupdates.length) {
+               @SuppressWarnings("unchecked")
+               HashSet<String> new_zoomout[] = new HashSet[level+1];
+               System.arraycopy(zoomoutupdates, 0, new_zoomout, 0, zoomoutupdates.length);
+               for(int i = 0; i < new_zoomout.length; i++) {
+                   if(i < zoomoutupdates.length)
+                       new_zoomout[i] = zoomoutupdates[i];
+                   else
+                       new_zoomout[i] = new HashSet<String>();
+               }
+               zoomoutupdates = new_zoomout;
+            }
             zoomoutupdates[level].add(f.getPath());
         }
     }
     
     private boolean popQueuedUpdate(File f, int level) {
-        if(level >= extrazoomoutlevels)
+        if(level >= zoomoutupdates.length)
             return false;
         synchronized(lock) {
             return zoomoutupdates[level].remove(f.getPath());
+        }
+    }
+    
+    private String[]	peekQueuedUpdates(int level) {
+        if(level >= zoomoutupdates.length)
+            return new String[0];
+        synchronized(lock) {
+            return zoomoutupdates[level].toArray(new String[zoomoutupdates[level].size()]);
         }
     }
     
@@ -97,76 +117,142 @@ public class DynmapWorld {
     }
 
     public void freshenZoomOutFiles() {
-        for(int i = 0; i < extrazoomoutlevels; i++) {
-            freshenZoomOutFilesByLevel(i);
+        boolean done = false;
+        int last_done = 0;
+        for(int i = 0; (!cancelled) && (!done); i++) {
+            done = freshenZoomOutFilesByLevel(i);
+            last_done = i;
+        }
+        /* Purge updates for levels above what any map needs */
+        for(int i = last_done; i < zoomoutupdates.length; i++) {
+            zoomoutupdates[i].clear();
         }
         checkts = false;	/* Just handle queued updates after first scan */
+    }
+    
+    public void cancelZoomOutFreshen() {
+        cancelled = true;
     }
     
     private static class PrefixData {
     	int stepsize;
     	int[] stepseq;
     	boolean neg_step_x;
+        boolean neg_step_y;
     	String baseprefix;
     	int zoomlevel;
     	String zoomprefix;
     	String fnprefix;
         String zfnprefix;
         int bigworldshift;
+        boolean isbigmap;
     }
     
-    public void freshenZoomOutFilesByLevel(int zoomlevel) {
+    public boolean freshenZoomOutFilesByLevel(int zoomlevel) {
         int cnt = 0;
         Debug.debug("freshenZoomOutFiles(" + world.getName() + "," + zoomlevel + ")");
         if(worldtilepath.exists() == false) /* Quit if not found */
-            return;
+            return true;
         HashMap<String, PrefixData> maptab = buildPrefixData(zoomlevel);
 
-        if(bigworld) {  /* If big world, next directories are map name specific */
-            DirFilter df = new DirFilter();
-            for(String pfx : maptab.keySet()) { /* Walk through prefixes, as directories */
-                PrefixData pd = maptab.get(pfx);
-                File dname = new File(worldtilepath, pfx);
-                /* Now, go through subdirectories under this one, and process them */
-                String[] subdir = dname.list(df);
-                if(subdir == null) continue;
-                for(String s : subdir) {
-                    File sdname = new File(dname, s);
-                    cnt += processZoomDirectory(sdname, pd);
+        if(checkts) {	/* If doing timestamp based scan (initial) */
+        	DirFilter df = new DirFilter();
+        	for(String pfx : maptab.keySet()) { /* Walk through prefixes */
+                if(cancelled) return true;
+        		PrefixData pd = maptab.get(pfx);
+        		if(pd.isbigmap) { /* If big world, next directories are map name specific */
+        			File dname = new File(worldtilepath, pfx);
+        			/* Now, go through subdirectories under this one, and process them */
+        			String[] subdir = dname.list(df);
+        			if(subdir == null) continue;
+        			for(String s : subdir) {
+        			    if(cancelled) return true;
+        				File sdname = new File(dname, s);
+        				cnt += processZoomDirectory(sdname, pd);
+        			}
+        		}
+        		else {  /* Else, classic file layout */
+        			cnt += processZoomDirectory(worldtilepath, maptab.get(pfx));
+        		}
+        	}
+        	Debug.debug("freshenZoomOutFiles(" + world.getName() + "," + zoomlevel + ") - done (" + cnt + " updated files)");
+        }
+        else {	/* Else, only process updates */
+            String[] paths = peekQueuedUpdates(zoomlevel);	/* Get pending updates */
+            HashMap<String, ProcessTileRec> toprocess = new HashMap<String, ProcessTileRec>();
+            /* Accumulate zoomed tiles to be processed (combine triggering subtiles) */
+            for(String p : paths) {
+                if(cancelled) return true;
+            	File f = new File(p);	/* Make file */
+            	/* Find matching prefix */
+            	for(PrefixData pd : maptab.values()) { /* Walk through prefixes */
+                    if(cancelled) return true;
+            		ProcessTileRec tr = null;
+            		/* If big map and matches name pattern */
+            		if(pd.isbigmap && f.getName().startsWith(pd.fnprefix) && 
+            				f.getParentFile().getParentFile().getName().equals(pd.baseprefix)) {
+                        tr = processZoomFile(f, pd);
+            		}
+                    /* If not big map and matches name pattern */
+                    else if((!pd.isbigmap) && f.getName().startsWith(pd.fnprefix)) {
+                        tr = processZoomFile(f, pd);
+                    }
+                    if(tr != null) {
+                        String zfpath = tr.zf.getPath();
+                        if(!toprocess.containsKey(zfpath))  {
+                            toprocess.put(zfpath, tr);
+                        }
+                    }
                 }
             }
-        }
-        else {  /* Else, classic file layout */
-            for(String pfx : maptab.keySet()) { /* Walk through prefixes, as directories */
-                cnt += processZoomDirectory(worldtilepath, maptab.get(pfx));
+            /* Do processing */
+            for(ProcessTileRec s : toprocess.values()) {
+                if(cancelled) return true;
+                processZoomTile(s.pd, s.zf, s.zfname, s.x, s.y);
             }
         }
-        Debug.debug("freshenZoomOutFiles(" + world.getName() + "," + zoomlevel + ") - done (" + cnt + " updated files)");
+        /* Return true when we have none left at the level */
+        return (maptab.size() == 0);
     }
     
     private HashMap<String, PrefixData> buildPrefixData(int zoomlevel) {
         HashMap<String, PrefixData> maptab = new HashMap<String, PrefixData>();
         /* Build table of file prefixes and step sizes */
         for(MapType mt : maps) {
+            /* If level is above top needed for this map, skip */
+            if(zoomlevel > (this.extrazoomoutlevels + mt.getMapZoomOutLevels()))
+                continue;
             List<String> pfx = mt.baseZoomFilePrefixes();
             int stepsize = mt.baseZoomFileStepSize();
             int bigworldshift = mt.getBigWorldShift();
             boolean neg_step_x = false;
-            if(stepsize < 0) {
-                stepsize = -stepsize;
-                neg_step_x = true;
+            boolean neg_step_y = false;
+            switch(mt.zoomFileMapStep()) {
+                case X_PLUS_Y_PLUS:
+                    break;
+                case X_MINUS_Y_PLUS:
+                    neg_step_x = true;
+                    break;
+                case X_PLUS_Y_MINUS:
+                    neg_step_y = true;
+                    break;
+                case X_MINUS_Y_MINUS:
+                    neg_step_x = neg_step_y = true;
+                    break;
             }
             int[] stepseq = mt.zoomFileStepSequence();
             for(String p : pfx) {
                 PrefixData pd = new PrefixData();
                 pd.stepsize = stepsize;
                 pd.neg_step_x = neg_step_x;
+                pd.neg_step_y = neg_step_y;
                 pd.stepseq = stepseq;
                 pd.baseprefix = p;
                 pd.zoomlevel = zoomlevel;
-                pd.zoomprefix = "zzzzzzzzzzzz".substring(0, zoomlevel);
+                pd.zoomprefix = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".substring(0, zoomlevel);
                 pd.bigworldshift = bigworldshift;
-                if(bigworld) {
+                pd.isbigmap = mt.isBigWorldMap(this);
+                if(pd.isbigmap) {
                     if(zoomlevel > 0) {
                         pd.zoomprefix += "_";
                         pd.zfnprefix = "z" + pd.zoomprefix;
@@ -191,10 +277,11 @@ public class DynmapWorld {
         File zf;
         String zfname;
         int x, y;
+        PrefixData pd;
     }
 
     private String makeFilePath(PrefixData pd, int x, int y, boolean zoomed) {
-        if(bigworld)
+        if(pd.isbigmap)
             return pd.baseprefix + "/" + (x >> pd.bigworldshift) + "_" + (y >> pd.bigworldshift) + "/" + (zoomed?pd.zfnprefix:pd.fnprefix) + x + "_" + y + ".png";
         else
             return (zoomed?pd.zfnprefix:pd.fnprefix) + "_" + x + "_" + y + ".png";            
@@ -218,7 +305,7 @@ public class DynmapWorld {
         int cnt = 0;
         /* Do processing */
         for(ProcessTileRec s : toprocess.values()) {
-            processZoomTile(pd, dir, s.zf, s.zfname, s.x, s.y);
+            processZoomTile(s.pd, s.zf, s.zfname, s.x, s.y);
             cnt++;
         }
         Debug.debug("processZoomDirectory(" + dir.getPath() + "," + pd.baseprefix + ") - done (" + cnt + " files)");
@@ -255,10 +342,12 @@ public class DynmapWorld {
         else
             x = x + (x % (2*step));
         if(pd.neg_step_x) x = -x;
+        if(pd.neg_step_y) y = -y;
         if(y >= 0)
             y = y - (y % (2*step));
         else
             y = y + (y % (2*step));
+        if(pd.neg_step_y) y = -y;
         /* Make name of corresponding zoomed tile */
         String zfname = makeFilePath(pd, x, y, true);
         File zf = new File(worldtilepath, zfname);
@@ -273,22 +362,25 @@ public class DynmapWorld {
         rec.x = x;
         rec.y = y;
         rec.zfname = zfname;
+        rec.pd = pd;
         Debug.debug("Process " + zf.getPath() + " due to " + f.getPath());
         return rec;
     }
     
-    private void processZoomTile(PrefixData pd, File dir, File zf, String zfname, int tx, int ty) {
-        Debug.debug("processZoomFile(" + pd.baseprefix + "," + dir.getPath() + "," + zf.getPath() + "," + tx + "," + ty + ")");
+    private void processZoomTile(PrefixData pd, File zf, String zfname, int tx, int ty) {
+        Debug.debug("processZoomFile(" + pd.baseprefix + "," + zf.getPath() + "," + tx + "," + ty + ")");
         int width = 128, height = 128;
         BufferedImage zIm = null;
-        KzedBufferedImage kzIm = null;
+        DynmapBufferedImage kzIm = null;
         int[] argb = new int[width*height];
         int step = pd.stepsize << pd.zoomlevel;
         int ztx = tx;
+        int zty = ty;
         tx = tx - (pd.neg_step_x?step:0);	/* Adjust for negative step */ 
+        ty = ty - (pd.neg_step_y?step:0);   /* Adjust for negative step */ 
 
         /* create image buffer */
-        kzIm = KzedMap.allocateBufferedImage(width, height);
+        kzIm = DynmapBufferedImage.allocateBufferedImage(width, height);
         zIm = kzIm.buf_img;
 
         for(int i = 0; i < 4; i++) {
@@ -301,30 +393,26 @@ public class DynmapWorld {
                     im = ImageIO.read(f);
                 } catch (IOException e) {
                 } catch (IndexOutOfBoundsException e) {
+                } finally {
+                    FileLockManager.releaseReadLock(f);
                 }
-                FileLockManager.releaseReadLock(f);
                 if(im != null) {
                     im.getRGB(0, 0, width, height, argb, 0, width);    /* Read data */
                     im.flush();
                     /* Do binlinear scale to 64x64 */
-                    Color c1 = new Color();
+                    int off = 0;
                     for(int y = 0; y < height; y += 2) {
-                        for(int x = 0; x < width; x += 2) {
-                            int red = 0;
-                            int green = 0;
-                            int blue = 0;
-                            int alpha = 0;
-                            for(int yy = y; yy < y+2; yy++) {
-                                for(int xx = x; xx < x+2; xx++) {
-                                    c1.setARGB(argb[(yy*width)+xx]);
-                                    red += c1.getRed();
-                                    green += c1.getGreen();
-                                    blue += c1.getBlue();
-                                    alpha += c1.getAlpha();
-                                }
-                            }
-                            c1.setRGBA(red>>2, green>>2, blue>>2, alpha>>2);
-                            argb[(y*width/2) + (x/2)] = c1.getARGB();
+                        off = y*width;
+                        for(int x = 0; x < width; x += 2, off += 2) {
+                            int p0 = argb[off];
+                            int p1 = argb[off+1];
+                            int p2 = argb[off+width];
+                            int p3 = argb[off+width+1];
+                            int alpha = ((p0 >> 24) & 0xFF) + ((p1 >> 24) & 0xFF) + ((p2 >> 24) & 0xFF) + ((p3 >> 24) & 0xFF);
+                            int red = ((p0 >> 16) & 0xFF) + ((p1 >> 16) & 0xFF) + ((p2 >> 16) & 0xFF) + ((p3 >> 16) & 0xFF);
+                            int green = ((p0 >> 8) & 0xFF) + ((p1 >> 8) & 0xFF) + ((p2 >> 8) & 0xFF) + ((p3 >> 8) & 0xFF);
+                            int blue = (p0 & 0xFF) + (p1 & 0xFF) + (p2 & 0xFF) + (p3 & 0xFF);
+                            argb[off>>1] = (((alpha>>2)&0xFF)<<24) | (((red>>2)&0xFF)<<16) | (((green>>2)&0xFF)<<8) | ((blue>>2)&0xFF);
                         }
                     }
                     /* blit scaled rendered tile onto zoom-out tile */
@@ -333,27 +421,33 @@ public class DynmapWorld {
             }
         }
         FileLockManager.getWriteLock(zf);
-        TileHashManager hashman = MapManager.mapman.hashman;
-        long crc = hashman.calculateTileHash(kzIm.argb_buf); /* Get hash of tile */
-        int tilex = ztx/step/2;
-        int tiley = ty/step/2;
-        String key = world.getName()+".z"+pd.zoomprefix+pd.baseprefix;
-        if((!zf.exists()) || (crc != MapManager.mapman.hashman.getImageHashCode(key, null, tilex, tiley))) {
-            try {
-                if(!zf.getParentFile().exists())
-                    zf.getParentFile().mkdirs();
-                FileLockManager.imageIOWrite(zIm, "png", zf);
-                Debug.debug("Saved zoom-out tile at " + zf.getPath());
-            } catch (IOException e) {
-                Debug.error("Failed to save zoom-out tile: " + zf.getName(), e);
-            } catch (java.lang.NullPointerException e) {
-                Debug.error("Failed to save zoom-out tile (NullPointerException): " + zf.getName(), e);
+        try {
+            MapManager mm = MapManager.mapman;
+            if(mm == null)
+                return;
+            TileHashManager hashman = mm.hashman;
+            long crc = hashman.calculateTileHash(kzIm.argb_buf); /* Get hash of tile */
+            int tilex = ztx/step/2;
+            int tiley = zty/step/2;
+            String key = world.getName()+".z"+pd.zoomprefix+pd.baseprefix;
+            if((!zf.exists()) || (crc != mm.hashman.getImageHashCode(key, null, tilex, tiley))) {
+                try {
+                    if(!zf.getParentFile().exists())
+                        zf.getParentFile().mkdirs();
+                    FileLockManager.imageIOWrite(zIm, "png", zf);
+                    Debug.debug("Saved zoom-out tile at " + zf.getPath());
+                } catch (IOException e) {
+                    Debug.error("Failed to save zoom-out tile: " + zf.getName(), e);
+                } catch (java.lang.NullPointerException e) {
+                    Debug.error("Failed to save zoom-out tile (NullPointerException): " + zf.getName(), e);
+                }
+                hashman.updateHashCode(key, null, tilex, tiley, crc);
+                MapManager.mapman.pushUpdate(this.world, new Client.Tile(zfname));
+                enqueueZoomOutUpdate(zf, pd.zoomlevel+1);
             }
-            hashman.updateHashCode(key, null, tilex, tiley, crc);
-            MapManager.mapman.pushUpdate(this.world, new Client.Tile(zfname));
-            enqueueZoomOutUpdate(zf, pd.zoomlevel+1);
+        } finally {
+            FileLockManager.releaseWriteLock(zf);
+            DynmapBufferedImage.freeBufferedImage(kzIm);
         }
-        FileLockManager.releaseWriteLock(zf);
-        KzedMap.freeBufferedImage(kzIm);
     }
 }

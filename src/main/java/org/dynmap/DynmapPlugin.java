@@ -1,7 +1,12 @@
 package org.dynmap;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -19,10 +24,12 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockBurnEvent;
+import org.bukkit.event.block.BlockFadeEvent;
+import org.bukkit.event.block.BlockFormEvent;
 import org.bukkit.event.block.BlockListener;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.block.BlockSpreadEvent;
 import org.bukkit.event.block.LeavesDecayEvent;
-import org.bukkit.event.block.SnowFormEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerListener;
 import org.bukkit.event.player.PlayerMoveEvent;
@@ -34,6 +41,8 @@ import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.dynmap.debug.Debug;
 import org.dynmap.debug.Debugger;
+import org.dynmap.hdmap.HDBlockModels;
+import org.dynmap.hdmap.TexturePack;
 import org.dynmap.permissions.NijikokunPermissions;
 import org.dynmap.permissions.OpPermissions;
 import org.dynmap.permissions.PermissionProvider;
@@ -50,10 +59,11 @@ public class DynmapPlugin extends JavaPlugin {
     public PermissionProvider permissions;
     public ComponentManager componentManager = new ComponentManager();
     public Events events = new Events();
+    public String deftemplatesuffix = "";
     /* Flag to let code know that we're doing reload - make sure we don't double-register event handlers */
     public boolean is_reload = false;
     private boolean generate_only = false;
-    private static boolean ignore_chunk_loads = false; /* Flat to keep us from processing our own chunk loads */
+    private static boolean ignore_chunk_loads = false; /* Flag keep us from processing our own chunk loads */
 
     public static File dataDirectory;
     public static File tilesDirectory;
@@ -65,20 +75,149 @@ public class DynmapPlugin extends JavaPlugin {
     public HttpServer getWebServer() {
         return webServer;
     }
+
+    /* Add/Replace branches in configuration tree with contribution from a separate file */
+    @SuppressWarnings("unchecked")
+    private void mergeConfigurationBranch(ConfigurationNode cfgnode, String branch, boolean replace_existing, boolean islist) {
+        Object srcbranch = cfgnode.getObject(branch);
+        if(srcbranch == null)
+            return;
+        /* See if top branch is in configuration - if not, just add whole thing */
+        Object destbranch = configuration.getObject(branch);
+        if(destbranch == null) {    /* Not found */
+            configuration.put(branch, srcbranch);   /* Add new tree to configuration */
+            return;
+        }
+        /* If list, merge by "name" attribute */
+        if(islist) {
+            List<ConfigurationNode> dest = configuration.getNodes(branch);
+            List<ConfigurationNode> src = cfgnode.getNodes(branch);
+            /* Go through new records : see what to do with each */
+            for(ConfigurationNode node : src) {
+                String name = node.getString("name", null);
+                if(name == null) continue;
+                /* Walk destination - see if match */
+                boolean matched = false;
+                for(ConfigurationNode dnode : dest) {
+                    String dname = dnode.getString("name", null);
+                    if(dname == null) continue;
+                    if(dname.equals(name)) {    /* Match? */
+                        if(replace_existing) {
+                            dnode.clear();
+                            dnode.putAll(node);
+                        }
+                        matched = true;
+                        break;
+                    }
+                }
+                /* If no match, add to end */
+                if(!matched) {
+                    dest.add(node);
+                }
+            }
+            configuration.put(branch,dest);
+        }
+        /* If configuration node, merge by key */
+        else {
+            ConfigurationNode src = cfgnode.getNode(branch);
+            ConfigurationNode dest = configuration.getNode(branch);
+            for(String key : src.keySet()) {    /* Check each contribution */
+                if(dest.containsKey(key)) { /* Exists? */
+                    if(replace_existing) {  /* If replacing, do so */
+                        dest.put(key, src.getObject(key));
+                    }
+                }
+                else {  /* Else, always add if not there */
+                    dest.put(key, src.getObject(key));
+                }
+            }
+        }
+    }
+    /* Table of default templates - all are resources in dynmap.jar unnder templates/, and go in templates directory when needed */
+    private static final String[] stdtemplates = { "normal.txt", "nether.txt", "skylands.txt", "normal-lowres.txt", 
+        "nether-lowres.txt", "skylands-lowres.txt", "normal-hires.txt", "nether-hires.txt", "skylands-hires.txt"
+    };
+    
+    private static final String CUSTOM_PREFIX = "custom-";
+    /* Load templates from template folder */
+    private void loadTemplates() {
+        File templatedir = new File(dataDirectory, "templates");
+        templatedir.mkdirs();
+        /* First, prime the templates directory with default standard templates, if needed */
+        for(String stdtemplate : stdtemplates) {
+            File f = new File(templatedir, stdtemplate);
+            createDefaultFileFromResource("/templates/" + stdtemplate, f);
+        }
+        /* Now process files */
+        String[] templates = templatedir.list();
+        /* Go through list - process all ones not starting with 'custom' first */
+        for(String tname: templates) {
+            /* If matches naming convention */
+            if(tname.endsWith(".txt") && (!tname.startsWith(CUSTOM_PREFIX))) {
+                File tf = new File(templatedir, tname);
+                org.bukkit.util.config.Configuration cfg = new org.bukkit.util.config.Configuration(tf);
+                cfg.load();
+                ConfigurationNode cn = new ConfigurationNode(cfg);
+                /* Supplement existing values (don't replace), since configuration.txt is more custom than these */
+                mergeConfigurationBranch(cn, "templates", false, false);
+            }
+        }
+        /* Go through list again - this time do custom- ones */
+        for(String tname: templates) {
+            /* If matches naming convention */
+            if(tname.endsWith(".txt") && tname.startsWith(CUSTOM_PREFIX)) {
+                File tf = new File(templatedir, tname);
+                org.bukkit.util.config.Configuration cfg = new org.bukkit.util.config.Configuration(tf);
+                cfg.load();
+                ConfigurationNode cn = new ConfigurationNode(cfg);
+                /* This are overrides - replace even configuration.txt content */
+                mergeConfigurationBranch(cn, "templates", true, false);
+            }
+        }
+    }
     
     @Override
     public void onEnable() {
+        /* Start with clean events */
+        events = new Events();
+        
         permissions = NijikokunPermissions.create(getServer(), "dynmap");
         if (permissions == null)
-            permissions = new OpPermissions(new String[] { "fullrender", "reload" });
+            permissions = new OpPermissions(new String[] { "fullrender", "cancelrender", "radiusrender", "resetstats", "reload" });
 
         dataDirectory = this.getDataFolder();
-
-        org.bukkit.util.config.Configuration bukkitConfiguration = new org.bukkit.util.config.Configuration(new File(this.getDataFolder(), "configuration.txt"));
+        /* Load block models */
+        HDBlockModels.loadModels(dataDirectory);
+        /* Load texture mappings */
+        TexturePack.loadTextureMapping(dataDirectory);
+        
+        /* Initialize confguration.txt if needed */
+        File f = new File(this.getDataFolder(), "configuration.txt");
+        if(!createDefaultFileFromResource("/configuration.txt", f)) {
+            this.setEnabled(false);
+            return;
+        }
+        /* Load configuration.txt */
+        org.bukkit.util.config.Configuration bukkitConfiguration = new org.bukkit.util.config.Configuration(f);
         bukkitConfiguration.load();
         configuration = new ConfigurationNode(bukkitConfiguration);
-        
+
+        /* Now, process worlds.txt - merge it in as an override of existing values (since it is only user supplied values) */
+        f = new File(this.getDataFolder(), "worlds.txt");
+        if(!createDefaultFileFromResource("/worlds.txt", f)) {
+            this.setEnabled(false);
+            return;
+        }
+        org.bukkit.util.config.Configuration cfg = new org.bukkit.util.config.Configuration(f);
+        cfg.load();
+        ConfigurationNode cn = new ConfigurationNode(cfg);
+        mergeConfigurationBranch(cn, "worlds", true, true);
+
+        /* Now, process templates */
+        loadTemplates();
+
         Log.verbose = configuration.getBoolean("verbose", true);
+        deftemplatesuffix = configuration.getString("deftemplatesuffix", "");
         
         loadDebuggers();
 
@@ -136,10 +275,17 @@ public class DynmapPlugin extends JavaPlugin {
             }
         }
         int port = configuration.getInteger("webserver-port", 8123);
-
-        webServer = new HttpServer(bindAddress, port);
-        webServer.handlers.put("/", new FilesystemHandler(getFile(configuration.getString("webpath", "web"))));
-        webServer.handlers.put("/tiles/", new FilesystemHandler(tilesDirectory));
+        boolean allow_symlinks = configuration.getBoolean("allow-symlinks", false);
+        boolean checkbannedips = configuration.getBoolean("check-banned-ips", true);
+        int maxconnections = configuration.getInteger("max-sessions", 30);
+        if(maxconnections < 2) maxconnections = 2;
+        if(allow_symlinks)
+        	Log.verboseinfo("Web server is permitting symbolic links");
+        else
+        	Log.verboseinfo("Web server is not permitting symbolic links");        	
+        webServer = new HttpServer(bindAddress, port, checkbannedips, maxconnections);
+        webServer.handlers.put("/", new FilesystemHandler(getFile(configuration.getString("webpath", "web")), allow_symlinks));
+        webServer.handlers.put("/tiles/", new FilesystemHandler(tilesDirectory, allow_symlinks));
         webServer.handlers.put("/up/configuration", new ClientConfigurationHandler(this));
     }
     
@@ -164,6 +310,7 @@ public class DynmapPlugin extends JavaPlugin {
         
         if (mapManager != null) {
             mapManager.stopRendering();
+            mapManager = null;
         }
 
         if (webServer != null) {
@@ -178,6 +325,14 @@ public class DynmapPlugin extends JavaPlugin {
         return enabledTriggers.contains(s);
     }
 
+    private boolean onplace;
+    private boolean onbreak;
+    private boolean onblockform;
+    private boolean onblockfade;
+    private boolean onblockspread;
+    private boolean onleaves;
+    private boolean onburn;
+
     public void registerEvents() {
         final PluginManager pm = getServer().getPluginManager();
         final MapManager mm = mapManager;
@@ -185,50 +340,102 @@ public class DynmapPlugin extends JavaPlugin {
         // To trigger rendering.
         {
             BlockListener renderTrigger = new BlockListener() {
+                
                 @Override
                 public void onBlockPlace(BlockPlaceEvent event) {
                     if(event.isCancelled())
                         return;
-                    mm.touch(event.getBlockPlaced().getLocation());
+                    if(onplace)
+                        mm.touch(event.getBlockPlaced().getLocation());
+                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
                 }
 
                 @Override
                 public void onBlockBreak(BlockBreakEvent event) {
                     if(event.isCancelled())
                         return;
-                    mm.touch(event.getBlock().getLocation());
-                }
-                @Override
-                public void onSnowForm(SnowFormEvent event) {
-                    if(event.isCancelled())
-                        return;
-                    mm.touch(event.getBlock().getLocation());        
+                    if(onbreak)
+                        mm.touch(event.getBlock().getLocation());
+                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
                 }
 
                 @Override
                 public void onLeavesDecay(LeavesDecayEvent event) {
                     if(event.isCancelled())
                         return;
-                    mm.touch(event.getBlock().getLocation());                
+                    if(onleaves)
+                        mm.touch(event.getBlock().getLocation());              
+                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
                 }
                 
                 @Override
                 public void onBlockBurn(BlockBurnEvent event) {
                     if(event.isCancelled())
                         return;
-                    mm.touch(event.getBlock().getLocation());
+                    if(onburn)
+                        mm.touch(event.getBlock().getLocation());
+                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
+                }
+                
+                @Override
+                public void onBlockForm(BlockFormEvent event) {
+                    if(event.isCancelled())
+                        return;
+                    if(onblockform)
+                        mm.touch(event.getBlock().getLocation());
+                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
+                }
+                @Override
+                public void onBlockFade(BlockFadeEvent event) {
+                    if(event.isCancelled())
+                        return;
+                    if(onblockfade)
+                        mm.touch(event.getBlock().getLocation());
+                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
+                }
+                @Override
+                public void onBlockSpread(BlockSpreadEvent event) {
+                    if(event.isCancelled())
+                        return;
+                    if(onblockspread)
+                        mm.touch(event.getBlock().getLocation());
+                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
                 }
             };
-            if (isTrigger("blockplaced"))
-                pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_PLACE, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
-            if (isTrigger("blockbreak"))
-                pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_BREAK, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
-            if (isTrigger("snowform"))
-                pm.registerEvent(org.bukkit.event.Event.Type.SNOW_FORM, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
-            if (isTrigger("leavesdecay"))
-                pm.registerEvent(org.bukkit.event.Event.Type.LEAVES_DECAY, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
-            if (isTrigger("blockburn"))
-                pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_BURN, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            onplace = isTrigger("blockplaced");
+            pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_PLACE, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            onbreak = isTrigger("blockbreak");
+            pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_BREAK, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            if(isTrigger("snowform")) Log.info("The 'snowform' trigger has been deprecated due to Bukkit changes - use 'blockformed'");
+            onleaves = isTrigger("leavesdecay");
+            pm.registerEvent(org.bukkit.event.Event.Type.LEAVES_DECAY, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            onburn = isTrigger("blockburn");
+            pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_BURN, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+
+            onblockform = isTrigger("blockformed");
+            try {
+                Class.forName("org.bukkit.event.block.BlockFormEvent");
+                pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_FORM, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            } catch (ClassNotFoundException cnfx) {
+                if(onblockform)
+                    Log.info("BLOCK_FORM event not supported by this version of CraftBukkit - event disabled");
+            }
+            onblockfade = isTrigger("blockfaded");
+            try {
+                Class.forName("org.bukkit.event.block.BlockFadeEvent");
+                pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_FADE, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            } catch (ClassNotFoundException cnfx) {
+                if(onblockfade)
+                    Log.info("BLOCK_FADE event not supported by this version of CraftBukkit - event disabled");
+            }
+            onblockspread = isTrigger("blockspread");
+            try {
+                Class.forName("org.bukkit.event.block.BlockSpreadEvent");
+                pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_SPREAD, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            } catch (ClassNotFoundException cnfx) {
+                if(onblockspread)
+                    Log.info("BLOCK_SPREAD event not supported by this version of CraftBukkit - event disabled");
+            }
         }
         {
             PlayerListener renderTrigger = new PlayerListener() {
@@ -339,6 +546,8 @@ public class DynmapPlugin extends JavaPlugin {
         "hide",
         "show",
         "fullrender",
+        "cancelrender",
+        "radiusrender",
         "reload",
         "stats",
         "resetstats" }));
@@ -360,8 +569,27 @@ public class DynmapPlugin extends JavaPlugin {
                 if (player != null) {
                     int invalidates = mapManager.touch(player.getLocation());
                     sender.sendMessage("Queued " + invalidates + " tiles" + (invalidates == 0
-                            ? " (world is not loaded?)"
-                            : "..."));
+                        ? " (world is not loaded?)"
+                        : "..."));
+                }
+                else {
+                    sender.sendMessage("Command can only be issued by player.");
+                }
+            }
+            else if(c.equals("radiusrender") && checkPlayerPermission(sender,"radiusrender")) {
+                if (player != null) {
+                    int radius = 0;
+                    if(args.length > 1) {
+                        radius = Integer.parseInt(args[1]); /* Parse radius */
+                        if(radius < 0)
+                            radius = 0;
+                    }
+                    Location loc = player.getLocation();
+                    if(loc != null)
+                        mapManager.renderWorldRadius(loc, sender, radius);
+                }
+                else {
+                    sender.sendMessage("Command can only be issued by player.");
                 }
             } else if (c.equals("hide")) {
                 if (args.length == 1) {
@@ -400,6 +628,22 @@ public class DynmapPlugin extends JavaPlugin {
                     Location loc = player.getLocation();
                     if(loc != null)
                         mapManager.renderFullWorld(loc, sender);
+                } else {
+                    sender.sendMessage("World name is required");
+                }
+            } else if (c.equals("cancelrender") && checkPlayerPermission(sender,"cancelrender")) {
+                if (args.length > 1) {
+                    for (int i = 1; i < args.length; i++) {
+                        World w = getServer().getWorld(args[i]);
+                        if(w != null)
+                            mapManager.cancelRender(w,sender);
+                        else
+                            sender.sendMessage("World '" + args[i] + "' not defined/loaded");
+                    }
+                } else if (player != null) {
+                    Location loc = player.getLocation();
+                    if(loc != null)
+                        mapManager.cancelRender(loc.getWorld(), sender);
                 } else {
                     sender.sendMessage("World name is required");
                 }
@@ -469,6 +713,9 @@ public class DynmapPlugin extends JavaPlugin {
     private ConfigurationNode getDefaultTemplateConfigurationNode(World world) {
         Environment environment = world.getEnvironment();
         String environmentName = environment.name().toLowerCase();
+        if(deftemplatesuffix.length() > 0) {
+            environmentName += "-" + deftemplatesuffix;
+        }
         Log.verboseinfo("Using environment as template: " + environmentName);
         return getTemplateConfigurationNode(environmentName);
     }
@@ -502,5 +749,36 @@ public class DynmapPlugin extends JavaPlugin {
     
     public static void setIgnoreChunkLoads(boolean ignore) {
         ignore_chunk_loads = ignore;
+    }
+    /* Uses resource to create default file, if file does not yet exist */
+    public boolean createDefaultFileFromResource(String resourcename, File deffile) {
+        if(deffile.canRead())
+            return true;
+        Log.info(deffile.getPath() + " not found - creating default");
+        InputStream in = getClass().getResourceAsStream(resourcename);
+        if(in == null) {
+            Log.severe("Unable to find default resource - " + resourcename);
+            return false;
+        }
+        else {
+            FileOutputStream fos = null;
+            try {
+                fos = new FileOutputStream(deffile);
+                byte[] buf = new byte[512];
+                int len;
+                while((len = in.read(buf)) > 0) {
+                    fos.write(buf, 0, len);
+                }
+            } catch (IOException iox) {
+                Log.severe("ERROR creatomg default for " + deffile.getPath());
+                return false;
+            } finally {
+                if(fos != null)
+                    try { fos.close(); } catch (IOException iox) {}
+                if(in != null)
+                    try { in.close(); } catch (IOException iox) {}
+            }
+            return true;
+        }
     }
 }

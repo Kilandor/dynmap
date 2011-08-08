@@ -1,16 +1,14 @@
 package org.dynmap.regions;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.util.List;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
-
+import java.util.HashSet;
+import java.util.logging.Level;
 import org.bukkit.util.config.Configuration;
 import org.dynmap.ConfigurationNode;
 import org.dynmap.Log;
@@ -18,6 +16,9 @@ import org.dynmap.web.HttpRequest;
 import org.dynmap.web.HttpResponse;
 import org.dynmap.web.Json;
 import org.dynmap.web.handlers.FileHandler;
+
+import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
 
 public class RegionHandler extends FileHandler {
     private ConfigurationNode regions;
@@ -62,7 +63,12 @@ public class RegionHandler extends FileHandler {
             return null;
         regionConfig.load();
         /* Parse region data and store in MemoryInputStream */
-        Map<?, ?> regionData = (Map<?, ?>) regionConfig.getProperty(regions.getString("basenode", "regions"));
+        String bnode = regions.getString("basenode", "regions");
+        Map<?, ?> regionData = (Map<?, ?>) regionConfig.getProperty(bnode);
+        if(regionData == null) {
+            Log.severe("Region data from " + infile.getPath() + " does not include basenode '" + bnode + "'");
+            return null;
+        }
         /* See if we have explicit list of regions to report - limit to this list if we do */
         List<String> idlist = regions.getStrings("visibleregions", null);
         if(idlist != null) {
@@ -81,9 +87,9 @@ public class RegionHandler extends FileHandler {
             fos.close();
             return new ByteArrayInputStream(fos.toByteArray());
         } catch (FileNotFoundException ex) {
-            Log.severe("Exception while writing JSON-file.", ex);
+            log.log(Level.SEVERE, "Exception while writing JSON-file.", ex);
         } catch (IOException ioe) {
-            Log.severe("Exception while writing JSON-file.", ioe);
+            log.log(Level.SEVERE, "Exception while writing JSON-file.", ioe);
         }        
         return null;
     }

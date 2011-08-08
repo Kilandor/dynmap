@@ -1,3 +1,16 @@
+/* TILE DEBUGGING */
+/*.leaflet-tile {
+	margin: -1;
+	border: 1px solid red;
+}*/
+
+/*******************
+ * Attribution placement
+ */
+.leaflet-control-attribution {
+	margin-right: 20px !important;
+}
+
 /*******************
  * Page setup
  */
@@ -22,6 +35,22 @@
     font-weight: bold;
 }
 
+.leaflet-control-zoom-in {
+    background-color: #eee;
+	}
+
+.leaflet-control-zoom-out {
+    background-color: #eee;
+	}
+
+.leaflet-control-zoom-in:hover {
+    background-color: #fff;
+	}
+
+.leaflet-control-zoom-out:hover {
+    background-color: #fff;
+	}
+
 
 /*******************
  * Map Setup
@@ -31,19 +60,13 @@
     width: 100%;
     height: 100%;
     background: #000;
+    z-index: 0;
 }
 
 /* Map Controls */
 .gmnoprint{
     margin-top:-75px;
-    margin-left:-20px
-}
-
-/* Google branding */
-
-.dynmap > div.map > DIV > DIV:first-child + DIV,
-.dynmap > div.map > DIV > DIV:first-child + DIV + DIV {
-    visibility: hidden !important;
+    margin-left:-20px;
 }
 
 
@@ -213,6 +236,7 @@
 .dynmap .panel .clock {
     display: inline-block;
     height: 16px;
+    z-index:50;
 
     font-weight: bold;
     background-repeat: no-repeat;
@@ -261,6 +285,7 @@
     width: 150px;
     height: 60px;
     background: rgba(0,0,0,0.6);
+    z-index:50;
 
     margin: auto;
 }
@@ -508,6 +533,22 @@
 	position: absolute;
 	top: 0px;
 	left: 34px;
+    z-index:20;
+
+	white-space: nowrap;
+
+    color: #fff;
+    background: rgba(0,0,0,0.6);
+    padding: 2px;
+
+    -moz-border-radius: 3px;
+    border-radius: 3px;
+}
+
+.dynmap .playerNameSm {
+	position: absolute;
+	top: -1px;
+	left: 18px;
 
 	white-space: nowrap;
 
@@ -565,29 +606,55 @@
  * Compass
  */
 
-.compass {
+.compass, .compass_NE, .compass_SE, .compass_NW, .compass_SW {
     display: block;
     position: absolute;
     z-index: 10;
-
     top: 20px;
     right: 32px;
-
     height: 84px;
     width: 83px;
-
     background-repeat: no-repeat;
+}
+
+.compass, .compass_SE {
     background-image: url(../images/compass.png);
 }
 
-.compass_flat {
+.compass_NE {
+    background-image: url(../images/compass_NE.png);
+}
+
+.compass_NW {
+    background-image: url(../images/compass_NW.png);
+}
+
+.compass_SW {
+    background-image: url(../images/compass_SW.png);
+}
+
+.compass_flat, .compass_N, .compass_E, .compass_W, .compass_S {
 	top: 10px;
 	right: 21px;
 
 	height: 105px;
 	width: 105px;
+}
 
+.compass_flat, .compass_S {
 	background-image: url(../images/compass_flat.png);
+}
+
+.compass_N {
+	background-image: url(../images/compass_N.png);
+}
+
+.compass_E {
+	background-image: url(../images/compass_E.png);
+}
+
+.compass_W {
+	background-image: url(../images/compass_W.png);
 }
 
 /*******************
@@ -598,6 +665,7 @@
 	position: absolute;
 	bottom: 0px;
 	left: 14px;
+    z-index:50;
 
     border-color: rgba(0,0,0,0.5);
     background: rgba(0,0,0,0.6);
@@ -618,10 +686,11 @@
 
 	outline: none;
 	color: #fff;
+	background-color: #000000;
 
 	border: 0px;
 	background: rgba(0, 0, 0, 0.6);
-	background: url(../images/chat_cursor.png) rgba(0,0,0,0.6);
+	background-image: url(../images/chat_cursor.png);
 	background-repeat: no-repeat;
 	background-position: 1px center;
 
@@ -662,6 +731,11 @@
 	top: -3px;
 	left: 0px;
 }
-.infowindow {
-color:black;
+
+.leaflet-popup {
+	color: black;
+}
+
+.balloonmessage {
+	word-wrap: break-word;
 }

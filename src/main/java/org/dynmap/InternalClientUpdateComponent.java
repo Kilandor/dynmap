@@ -45,9 +45,11 @@ public class InternalClientUpdateComponent extends ClientUpdateComponent {
     }
     
     protected void webChat(String name, String message) {
+        if(plugin.mapManager == null)
+            return;
         // TODO: Change null to something meaningful.
         plugin.mapManager.pushUpdate(new Client.ChatMessage("web", null, name, message, null));
-        Log.info(plugin.configuration.getString("webprefix", "\u00A72[WEB] ") + name + ": " + plugin.configuration.getString("websuffix", "\u00A7f") + message);
+        Log.info(unescapeString(plugin.configuration.getString("webprefix", "\u00A72[WEB] ")) + name + ": " + unescapeString(plugin.configuration.getString("websuffix", "\u00A7f")) + message);
         ChatEvent event = new ChatEvent("web", name, message);
         plugin.events.trigger("webchat", event);
     }

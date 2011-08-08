@@ -19,63 +19,6 @@ componentconstructors['testcomponent'] = function(dynmap, configuration) {
 	$(dynmap).bind('playerupdated', function() { console.log('playerupdated'); });
 };
 
-function loadjs(url, completed) {
-	var script = document.createElement('script');
-	script.setAttribute('src', url);
-	script.setAttribute('type', 'text/javascript');
-	var isloaded = false;
-	script.onload = function() {
-		if (isloaded) { return; }
-		isloaded = true;
-		completed();
-	};
-	
-	// Hack for IE, don't know whether this still applies to IE9.
-	script.onreadystatechange = function() {
-		script.onload();
-	};
-	(document.head || document.getElementsByTagName('head')[0]).appendChild(script);
-}
-
-function splitArgs(s) {
-	var r = s.split(' ');
-	delete arguments[0];
-	var obj = {};
-	var index = 0;
-	$.each(arguments, function(argumentIndex, argument) {
-		if (!argumentIndex) { return; }
-		var value = r[argumentIndex-1];
-		obj[argument] = value;
-	});
-	return obj;
-}
-
-function swtch(value, options, defaultOption) {
-	return (options[value] || defaultOption || function(){})(value);
-}
-(function( $ ){
-	$.fn.scrollHeight = function(height) {
-		return this[0].scrollHeight;
-	};
-})($);
-
-function DynMapType() { }
-DynMapType.prototype = {
-	onTileUpdated: function(tile, tileName) {
-		var src = this.dynmap.getTileUrl(tileName);
-		tile.attr('src', src);
-		tile.show();
-	},
-	updateTileSize: function(zoom) {}
-};
-
-function Location(world, x, y, z) {
-	this.world = world;
-	this.x = x;
-	this.y = y;
-	this.z = z;
-}
-
 function DynMap(options) {
 	var me = this;
 	me.options = options;
@@ -96,6 +39,8 @@ DynMap.prototype = {
     serverday: false,
     inittime: new Date().getTime(),
 	followingPlayer: '',
+	missedupdates: 0,
+	canvassupport: !!document.createElement('canvas').getContext,
 	formatUrl: function(name, options) {
 		var url = this.options.url[name];
 		$.each(options, function(n,v) {
@@ -118,7 +63,8 @@ DynMap.prototype = {
 					dynmap: me
 				});
 				map = world.maps[mapentry.name] = maptypes[mapentry.type](map);
-				
+				if(me.options.defaultmap && me.options.defaultmap == mapentry.name)
+					world.defaultmap = map;				
 				world.defaultmap = world.defaultmap || map;
 			});
 			me.defaultworld = me.defaultworld || world;
@@ -131,18 +77,15 @@ DynMap.prototype = {
 		if(urlarg != "") {
 			me.defaultworld.defaultmap = me.defaultworld.maps[urlarg] || me.defaultworld.defaultmap;
 		}
-		urlarg = parseInt(me.getParameterByName('x'),10);
-		if(urlarg != NaN) {
+		urlarg = me.getIntParameterByName('x');
+		if(urlarg != null)
 			me.defaultworld.center.x = urlarg;
-		}
-		urlarg = parseInt(me.getParameterByName('y'),10);
-		if(urlarg != NaN) {
+		urlarg = me.getIntParameterByName('y');
+		if(urlarg != null)
 			me.defaultworld.center.y = urlarg;
-		}
-		urlarg = parseInt(me.getParameterByName('z'), 10);
-		if(urlarg != NaN) {
+		urlarg = me.getIntParameterByName('z');
+		if(urlarg != null)
 			me.defaultworld.center.z = urlarg;
-		}
 	},
 	initialize: function() {
 		var me = this;
@@ -155,39 +98,46 @@ DynMap.prototype = {
 			.addClass('map')
 			.appendTo(container);
 
-		var urlzoom = parseInt(me.getParameterByName('zoom'),10);
-		if(urlzoom != NaN) { me.options.defaultzoom = urlzoom; }
+		var urlzoom = me.getIntParameterByName('zoom');
+		if(urlzoom != null)
+			me.options.defaultzoom = urlzoom;
+			
+		if(typeof me.options.defaultzoom == 'undefined')
+			me.options.defaultzoom = 1;
 		
-		var map = this.map = new google.maps.Map(mapContainer.get(0), {
-			zoom: me.options.defaultzoom || 0,
-			center: new google.maps.LatLng(0, 1),
-			navigationControl: true,
-			navigationControlOptions: {
-				style: google.maps.NavigationControlStyle.DEFAULT
-			},
-			scaleControl: false,
-			mapTypeControl: false,
-			streetViewControl: false,
-			backgroundColor: '#000000'
+		var map = this.map = new L.Map(mapContainer.get(0), {
+			zoom: me.options.defaultzoom,
+			center: new L.LatLng(0, 0),
+			zoomAnimation: true,
+			attributionControl: false,
+			crs: L.Util.extend({}, L.CRS, {
+				code: 'simple',
+				projection: {
+						project: function(latlng) {
+							return new L.Point(latlng.lat, latlng.lng);
+						},
+						unproject: function(point, unbounded) {
+							return new L.LatLng(point.x, point.y, true);
+						}
+					},
+				transformation: new L.Transformation(1, 0, 1, 0)
+			}),
+			scale: function(zoom) {
+				return (1 << zoom);
+			}
 		});
 		
 		map.zoom_changed = function() {
 			me.maptype.updateTileSize(me.map.zoom);
 			$(me).trigger('zoomchanged');
 		};
-
-		google.maps.event.addListener(map, 'dragstart', function(mEvent) {
+		
+		if(me.canvassupport == false)
+			me.options.showplayerfacesinmenu = false;
+			
+		/*google.maps.event.addListener(map, 'dragstart', function(mEvent) {
 			me.followPlayer(null);
-		});
-		// TODO: Enable hash-links.
-		/*
-		google.maps.event.addListener(map, 'zoom_changed', function() {
-			me.updateLink();
-		});
-		google.maps.event.addListener(map, 'center_changed', function() {
-			me.updateLink();
-		});
-		*/
+		});*/
 
 		// Sidebar
 		var panel;
@@ -238,16 +188,16 @@ DynMap.prototype = {
 				.data('world', world)
 				.appendTo(worldlist);
 			
-			$.each(world.maps, function(index, map) {
-				me.map.mapTypes.set(map.world.name + '.' + map.name, map);
+			$.each(world.maps, function(mapindex, map) {
+				//me.map.mapTypes.set(map.world.name + '.' + map.name, map);
 				
 				map.element = $('<li/>')
 					.addClass('map')
 					.append($('<a/>')
-							.attr({ title: map.title, href: '#' })
+							.attr({ title: map.options.title, href: '#' })
 							.addClass('maptype')
-							.css({ backgroundImage: 'url(' + (map.icon || 'images/block_' + map.name + '.png') + ')' })
-							.text(map.title)
+							.css({ backgroundImage: 'url(' + (map.options.icon || ('images/block_' + mapindex + '.png')) + ')' })
+							.text(map.options.title)
 							)
 					.click(function() {
 						me.selectMap(map);
@@ -294,13 +244,18 @@ DynMap.prototype = {
 		
 		var updateHeight = function() {
 			playerlist.height(sidebar.innerHeight() - (playerlist.offset().top - worldlist.offset().top) - 64); // here we need a fix to avoid the static value, but it works fine this way :P
-			var scrollable = playerlist.scrollHeight() > playerlist.height();
+			var scrollable = playerlist.scrollHeight() < playerlist.height();
 			upbtn.toggle(scrollable);
 			downbtn.toggle(scrollable);
 		};
 		updateHeight();
 		$(window).resize(updateHeight);
-		
+		$(dynmap).bind('playeradded', function() {
+			updateHeight();
+		});
+		$(dynmap).bind('playerremoved', function() {
+			updateHeight();
+		});
 		// The Compass
 		var compass = $('<div/>')
 			.addClass('compass')
@@ -344,7 +299,8 @@ DynMap.prototype = {
 			});
 		});
 	},
-	selectMap: function(map, completed) {
+	getProjection: function() { return this.maptype.getProjection(); },
+	selectMapAndPan: function(map, location, completed) {
 		if (!map) { throw "Cannot select map " + map; }
 		var me = this;
 		
@@ -352,52 +308,117 @@ DynMap.prototype = {
 			return;
 		}
 		$(me).trigger('mapchanging');
+		var mapWorld = map.options.world;
 		if (me.maptype) {
-			$('.compass').removeClass('compass_' + me.maptype.name);
+			$('.compass').removeClass('compass_' + me.maptype.options.compassview);
+			$('.compass').removeClass('compass_' + me.maptype.options.name);
 		}
-		$('.compass').addClass('compass_' + map.name);
-		var worldChanged = me.world !== map.world;
-		var projectionChanged = me.map.getProjection() !== map.projection;
-		me.map.setMapTypeId('none');
-		me.world = map.world;
+		$('.compass').addClass('compass_' + map.options.compassview);
+		$('.compass').addClass('compass_' + map.options.name);
+		var worldChanged = me.world !== map.options.world;
+		var projectionChanged = (me.maptype && me.maptype.getProjection()) !== (map && map.projection);
+
+		var prevzoom = me.map.getZoom(); 					
+
+		if (me.maptype) {
+			me.map.removeLayer(me.maptype);
+		}
+		
+		var prevmap = me.maptype;
+	
+		me.world = mapWorld;
 		me.maptype = map;
-		me.maptype.updateTileSize(me.map.zoom);
-		window.setTimeout(function() {
-			me.map.setMapTypeId(map.world.name + '.' + map.name);
-			if (worldChanged) {
-				$(me).trigger('worldchanged');
+
+		if(me.maptype.options.maxZoom < prevzoom)
+			prevzoom = me.maptype.options.maxZoom;
+		me.map.options.maxZoom = me.maptype.options.maxZoom;
+		me.map.options.minZoom = me.maptype.options.minZoom;
+				
+		if (projectionChanged || worldChanged || location) {
+			var centerPoint;
+			if(location) {
+				centerPoint = me.getProjection().fromLocationToLatLng(location);
 			}
-			if (projectionChanged || worldChanged) {
-				if (map.world.center) {
-					me.map.panTo(map.projection.fromWorldToLatLng(map.world.center.x||0,map.world.center.y||64,map.world.center.z||0));
-				} else {
-					me.map.panTo(map.projection.fromWorldToLatLng(0,64,0));
-				}
+			else if(worldChanged) {
+				var centerLocation = $.extend({ x: 0, y: 64, z: 0 }, mapWorld.center);
+				centerPoint = me.getProjection().fromLocationToLatLng(centerLocation);
 			}
-			$(me).trigger('mapchanged');
-			if (completed) {
-				completed();
+			else {
+				var prevloc = null;
+				if(prevmap != null)
+					prevloc = prevmap.getProjection().fromLatLngToLocation(me.map.getCenter(), 64);
+				if(prevloc != null)
+					centerPoint = me.getProjection().fromLocationToLatLng(prevloc);
+				else
+					centerPoint = me.map.getCenter();
 			}
-		}, 1);
+			me.map.setView(centerPoint, prevzoom, true);
+		}
+		else {			
+			me.map.setZoom(prevzoom);
+		}
+		me.map.addLayer(me.maptype);
+				
+		if (worldChanged) {
+			$(me).trigger('worldchanged');
+		}
+		$(me).trigger('mapchanged');
+
 		$('.map', me.worldlist).removeClass('selected');
 		$(map.element).addClass('selected');
 		me.updateBackground();
+		
+		
+		if (completed) {
+			completed();
+		}
 	},
-	selectWorld: function(world, completed) {
+	selectMap: function(map, completed) {
+		this.selectMapAndPan(map, null, completed);
+	},
+	selectWorldAndPan: function(world, location, completed) {
 		var me = this;
 		if (typeof(world) === 'String') { world = me.worlds[world]; }
 		if (me.world === world) {
-			if (completed) { completed(); }
+			if(location) {
+				var latlng = me.maptype.getProjection().fromLocationToLatLng(location);
+				me.panToLatLng(latlng, completed);
+			}
+			else {
+				if (completed) { completed(); }
+			}
 			return;
 		}
-		me.selectMap(world.defaultmap, completed);
+		me.selectMapAndPan(world.defaultmap, location, completed);
 	},
-	panTo: function(location, completed) {
+	selectWorld: function(world, completed) {
+		this.selectWorldAndPan(world, null, completed);
+	},
+	panToLocation: function(location, completed) {
 		var me = this;
-		me.selectWorld(location.world, function() {
-			var position = me.map.getProjection().fromWorldToLatLng(location.x, location.y, location.z);
-			me.map.panTo(position);
-		});
+		
+		if (location.world) {
+			me.selectWorldAndPan(location.world, location, function() {
+				if(completed) completed();
+			});
+		} else {
+			var latlng = me.maptype.getProjection().fromLocationToLatLng(location);
+			me.panToLatLng(latlng, completed);
+		}
+	},
+	panToLayerPoint: function(point, completed) {
+		var me = this;
+		var latlng = me.map.layerPointToLatLng(point);
+		me.map.panToLatLng(latlng);
+		if (completed) {
+			completed();
+		}
+	},
+	panToLatLng: function(latlng, completed) {
+		this.map.panTo(latlng);
+		if (completed) {
+			completed();
+		}
 	},
 	update: function() {
 		var me = this;
@@ -415,11 +436,17 @@ DynMap.prototype = {
 				}
 
 				me.servertime = update.servertime;                
-				var oldday = me.serverday;
-				if(me.servertime > 23100 || me.servertime < 12900)
-					me.serverday = true;
-				else
-					me.serverday = false;
+				var newserverday = (me.servertime > 23100 || me.servertime < 12900);
+				if(me.serverday != newserverday) {
+					me.serverday = newserverday;
+					
+					me.updateBackground();				
+					if(me.maptype.options.nightandday) {
+						// Readd map.
+						me.map.removeLayer(me.maptype);
+						me.map.addLayer(me.maptype);
+					}
+				}
                     
 				var newplayers = {};
 				$.each(update.players, function(index, playerUpdate) {
@@ -462,28 +489,20 @@ DynMap.prototype = {
 					//var divs = $('div[rel]');
 					//divs.filter(function(i){return parseInt(divs[i].attr('rel')) > timestamp+me.options.messagettl;}).remove();
 				});
-
-				if(me.serverday != oldday) {
-					me.updateBackground();				
-					var mtid = me.map.mapTypeId;
-					if(me.map.mapTypes[mtid].nightandday) {
-						me.map.setMapTypeId('none');
-						window.setTimeout(function() {
-							me.map.setMapTypeId(mtid);
-						}, 0.1);
-					}
-				}
 				
 				$(me).trigger('worldupdated', [ update ]);
 				
 				me.lasttimestamp = update.timestamp;
-				
+				me.missedupdates = 0;
 				setTimeout(function() { me.update(); }, me.options.updaterate);
 			}, function(status, statusText, request) {
-				me.alertbox
-					.text('Could not update map: ' + (statusText || 'Could not connect to server'))
-					.show();
-				$(me).trigger('worldupdatefailed');
+				me.missedupdates++;
+				if(me.missedupdates > 2) {
+					me.alertbox
+						.text('Could not update map: ' + (statusText || 'Could not connect to server'))
+						.show();
+					$(me).trigger('worldupdatefailed');
+				}
 				setTimeout(function() { me.update(); }, me.options.updaterate);
 			}
 		);
@@ -516,6 +535,7 @@ DynMap.prototype = {
 			tile.lastseen = timestamp;
 			tile.mapType.onTileUpdated(tile.tileElement, tileName);
 		}
+		me.maptype.updateNamedTile(tileName);
 	},
 	addPlayer: function(update) {
 		var me = this;
@@ -553,7 +573,7 @@ DynMap.prototype = {
 				if (me.followingPlayer !== player) {
 					me.followPlayer(null);
 				}
-				me.panTo(player.location);
+				me.panToLocation(player.location);
 			})
 			.appendTo(me.playerlist);
 		if (me.options.showplayerfacesinmenu) {
@@ -576,7 +596,7 @@ DynMap.prototype = {
 		
 		if (player === me.followingPlayer) {
 			// Follow the updated player.
-			me.panTo(player.location);
+			me.panToLocation(player.location);
 		}
 	},
 	removePlayer: function(player) {
@@ -595,7 +615,7 @@ DynMap.prototype = {
 		
 		if(player) {
 			$(player.menuitem).addClass('following');
-			me.panTo(player.location);
+			me.panToLocation(player.location);
 		}
 		this.followingPlayer = player;
 	},
@@ -603,18 +623,19 @@ DynMap.prototype = {
 		var me = this;
 		var col = "#000000";
 		if(me.serverday) {
-			if(me.maptype.backgroundday)
-				col = me.maptype.backgroundday;
-			else if(me.maptype.background)
-				col = me.maptype.background;
+			if(me.maptype.options.backgroundday)
+				col = me.maptype.options.backgroundday;
+			else if(me.maptype.options.background)
+				col = me.maptype.options.background;
 		}
 		else {
-			if(me.maptype.backgroundnight)
-				col = me.maptype.backgroundnight;
-			else if(me.maptype.background)
-				col = me.maptype.background;
+			if(me.maptype.options.backgroundnight)
+				col = me.maptype.options.backgroundnight;
+			else if(me.maptype.options.background)
+				col = me.maptype.options.background;
 		}
 		$('.map').css('background', col);
+		$('.leaflet-tile').css('background', col);
 	},
 	getParameterByName: function(name) {
 		name = name.replace(/[\[]/,"\\\[").replace(/[\]]/,"\\\]");
@@ -625,6 +646,16 @@ DynMap.prototype = {
 			return "";
 		else
 			return decodeURIComponent(results[1].replace(/\+/g, " "));
+	},
+	getIntParameterByName: function(name) {
+		var v = this.getParameterByName(name);
+		if(v != "") {
+			v = parseInt(v, 10);
+			if(v != NaN) {
+				return v;
+				}
+		}
+		return null;
 	}
 	// TODO: Enable hash-links.
 /*	updateLink: function() {

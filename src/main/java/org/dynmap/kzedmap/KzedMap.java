@@ -5,6 +5,7 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -17,6 +18,8 @@ import org.dynmap.Log;
 import org.dynmap.MapManager;
 import org.dynmap.MapTile;
 import org.dynmap.MapType;
+import org.dynmap.MapType.MapStep;
+import org.dynmap.utils.DynmapBufferedImage;
 import org.dynmap.utils.MapChunkCache;
 import org.json.simple.JSONObject;
 import java.awt.image.DataBufferInt;
@@ -46,20 +49,7 @@ public class KzedMap extends MapType {
     public static final int anchorz = 0;
     
     MapTileRenderer[] renderers;
-
-    /* BufferedImage with direct access to its ARGB-formatted data buffer */
-    public static class KzedBufferedImage {
-        public BufferedImage buf_img;
-        public int[] argb_buf;
-        public int width;
-        public int height;
-    }
-
-    /* BufferedImage cache - we use the same things a lot... */
-    private static Object lock = new Object();
-    private static HashMap<Long, LinkedList<KzedBufferedImage>> imgcache = 
-        new HashMap<Long, LinkedList<KzedBufferedImage>>(); /* Indexed by resolution - X<<32+Y */
-    private static final int CACHE_LIMIT = 10;
+    private boolean isbigmap;
 
     public KzedMap(ConfigurationNode configuration) {
         Log.verboseinfo("Loading renderers for map '" + getClass().toString() + "'...");
@@ -67,6 +57,7 @@ public class KzedMap extends MapType {
         this.renderers = new MapTileRenderer[renderers.size()];
         renderers.toArray(this.renderers);
         Log.verboseinfo("Loaded " + renderers.size() + " renderers for map '" + getClass().toString() + "'.");
+        isbigmap = configuration.getBoolean("isbigmap", false);
     }
 
     @Override
@@ -125,6 +116,10 @@ public class KzedMap extends MapType {
             DynmapWorld world = tile.getDynmapWorld();
             MapTileRenderer renderer = t.renderer;
             return new MapTile[] {
+                new KzedMapTile(world, this, renderer, t.px - tileWidth, t.py + tileHeight),
+                new KzedMapTile(world, this, renderer, t.px + tileWidth, t.py - tileHeight),
+                new KzedMapTile(world, this, renderer, t.px - tileWidth, t.py - tileHeight),
+                new KzedMapTile(world, this, renderer, t.px + tileWidth, t.py + tileHeight),
                 new KzedMapTile(world, this, renderer, t.px - tileWidth, t.py),
                 new KzedMapTile(world, this, renderer, t.px + tileWidth, t.py),
                 new KzedMapTile(world, this, renderer, t.px, t.py - tileHeight),
@@ -137,10 +132,6 @@ public class KzedMap extends MapType {
         for (int i = 0; i < renderers.length; i++) {
             tiles.add(new KzedMapTile(world, this, renderers[i], px, py));
         }
-    }
-
-    public void invalidateTile(MapTile tile) {
-        onTileInvalidated.trigger(tile);
     }
 
     /**
@@ -263,52 +254,6 @@ public class KzedMap extends MapType {
             return y - (y % zTileHeight);
     }
 
-    /**
-     * Allocate buffered image from pool, if possible
-     * @param x - x dimension
-     * @param y - y dimension
-     */
-    public static KzedBufferedImage allocateBufferedImage(int x, int y) {
-        KzedBufferedImage img = null;
-        synchronized(lock) {
-            long k = (x<<16) + y;
-            LinkedList<KzedBufferedImage> ll = imgcache.get(k);
-            if(ll != null) {
-                img = ll.poll();
-            }
-        }
-        if(img != null) {   /* Got it - reset it for use */
-            Arrays.fill(img.argb_buf, 0);
-        }
-        else {
-            img = new KzedBufferedImage();
-            img.width = x;
-            img.height = y;
-            img.argb_buf = new int[x*y];
-        }
-        img.buf_img = createBufferedImage(img.argb_buf, img.width, img.height);
-        return img;
-    }
-    
-    /**
-     * Return buffered image to pool
-     */
-    public static void freeBufferedImage(KzedBufferedImage img) {
-        img.buf_img.flush();
-        img.buf_img = null; /* Toss bufferedimage - seems to hold on to other memory */
-        synchronized(lock) {
-            long k = (img.width<<16) + img.height;
-            LinkedList<KzedBufferedImage> ll = imgcache.get(k);
-            if(ll == null) {
-                ll = new LinkedList<KzedBufferedImage>();
-                imgcache.put(k, ll);
-            }
-            if(ll.size() < CACHE_LIMIT) {
-                ll.add(img);
-                img = null;
-            }
-        }
-    }    
 
     public boolean isBiomeDataNeeded() {
         for(MapTileRenderer r : renderers) {
@@ -329,14 +274,15 @@ public class KzedMap extends MapType {
     public List<String> baseZoomFilePrefixes() {
         ArrayList<String> s = new ArrayList<String>();
         for(MapTileRenderer r : renderers) {
-            s.add("z" + r.getName());
+            s.add("z" + r.getPrefix());
             if(r.isNightAndDayEnabled())
-                s.add("z" + r.getName() + "_day");
+                s.add("z" + r.getPrefix() + "_day");
         }
         return s;
     }
-    /* Return negative to flag negative X walk */
-    public int baseZoomFileStepSize() { return -zTileWidth; }
+    public int baseZoomFileStepSize() { return zTileWidth; }
+    
+    public MapStep zoomFileMapStep() { return MapStep.X_MINUS_Y_PLUS; }
 
     private static final int[] stepseq = { 0, 2, 1, 3 };
     
@@ -344,31 +290,37 @@ public class KzedMap extends MapType {
     /* How many bits of coordinate are shifted off to make big world directory name */
     public int getBigWorldShift() { return 12; }
 
+    /* Returns true if big world file structure is in effect for this map */
+    @Override
+    public boolean isBigWorldMap(DynmapWorld w) {
+        return w.bigworld || isbigmap; 
+    }
+    
     public String getName() {
         return "KzedMap";
     }
 
-    @Override
-    public void buildClientConfiguration(JSONObject worldObject) {
-        for(MapTileRenderer renderer : renderers) {
-            renderer.buildClientConfiguration(worldObject);
-        }
+    /* Get maps rendered concurrently with this map in this world */
+    public List<MapType> getMapsSharingRender(DynmapWorld w) {
+        return Collections.singletonList((MapType)this);
     }
 
-    /* ARGB band masks */
-    private static final int [] band_masks = {0xFF0000, 0xFF00, 0xff, 0xff000000};
+    /* Get names of maps rendered concurrently with this map type in this world */
+    public List<String> getMapNamesSharingRender(DynmapWorld w) {
+        ArrayList<String> lst = new ArrayList<String>();
+        for(MapTileRenderer rend : renderers) {
+            if(rend.isNightAndDayEnabled())
+                lst.add(rend.getName() + "(night/day)");
+            else
+                lst.add(rend.getName());
+        }
+        return lst;
+    }
 
-    /**
-     * Build BufferedImage from provided ARGB array and dimensions
-     */
-    public static BufferedImage createBufferedImage(int[] argb_buf, int w, int h) {
-        /* Create integer-base data buffer */
-        DataBuffer db = new DataBufferInt (argb_buf, w*h);
-        /* Create writable raster */
-        WritableRaster raster = Raster.createPackedRaster(db, w, h, w, band_masks, null);
-        /* RGB color model */
-        ColorModel color_model = ColorModel.getRGBdefault ();
-        /* Return buffered image */
-        return new BufferedImage (color_model, raster, false, null);
+    @Override
+    public void buildClientConfiguration(JSONObject worldObject, DynmapWorld world) {
+        for(MapTileRenderer renderer : renderers) {
+            renderer.buildClientConfiguration(worldObject, world, this);
+        }
     }
 }

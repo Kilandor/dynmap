@@ -16,18 +16,21 @@ import org.dynmap.Client;
 import org.dynmap.Color;
 import org.dynmap.ColorScheme;
 import org.dynmap.ConfigurationNode;
+import org.dynmap.DynmapWorld;
 import org.dynmap.MapManager;
 import org.dynmap.TileHashManager;
 import org.dynmap.debug.Debug;
-import org.dynmap.kzedmap.KzedMap.KzedBufferedImage;
+import org.dynmap.utils.DynmapBufferedImage;
 import org.dynmap.utils.FileLockManager;
 import org.dynmap.utils.MapChunkCache;
 import org.dynmap.utils.MapIterator;
+import org.dynmap.utils.MapIterator.BlockStep;
 import org.json.simple.JSONObject;
 
 public class DefaultTileRenderer implements MapTileRenderer {
     protected static final Color translucent = new Color(0, 0, 0, 0);
     protected String name;
+    protected String prefix;
     protected ConfigurationNode configuration;
     protected int maximumHeight = 127;
     protected ColorScheme colorScheme;
@@ -43,7 +46,12 @@ public class DefaultTileRenderer implements MapTileRenderer {
         NONE, BIOME, TEMPERATURE, RAINFALL
     }
     protected BiomeColorOption biomecolored = BiomeColorOption.NONE; /* Use biome for coloring */
+
     @Override
+    public String getPrefix() {
+        return prefix;
+    }
+
     public String getName() {
         return name;
     }
@@ -52,7 +60,8 @@ public class DefaultTileRenderer implements MapTileRenderer {
 
     public DefaultTileRenderer(ConfigurationNode configuration) {
         this.configuration = configuration;
-        name = (String) configuration.get("prefix");
+        name = configuration.getString("name", null);
+        prefix = configuration.getString("prefix", name);
         Object o = configuration.get("maximumheight");
         if (o != null) {
             maximumHeight = Integer.parseInt(String.valueOf(o));
@@ -110,15 +119,15 @@ public class DefaultTileRenderer implements MapTileRenderer {
     public boolean render(MapChunkCache cache, KzedMapTile tile, File outputFile) {
         World world = tile.getWorld();
         boolean isnether = (world.getEnvironment() == Environment.NETHER);
-        KzedBufferedImage im = KzedMap.allocateBufferedImage(KzedMap.tileWidth, KzedMap.tileHeight);
-        KzedBufferedImage zim = KzedMap.allocateBufferedImage(KzedMap.tileWidth/2, KzedMap.tileHeight/2);
+        DynmapBufferedImage im = DynmapBufferedImage.allocateBufferedImage(KzedMap.tileWidth, KzedMap.tileHeight);
+        DynmapBufferedImage zim = DynmapBufferedImage.allocateBufferedImage(KzedMap.tileWidth/2, KzedMap.tileHeight/2);
         boolean isempty = true;
         
-        KzedBufferedImage im_day = null;
-        KzedBufferedImage zim_day = null;
+        DynmapBufferedImage im_day = null;
+        DynmapBufferedImage zim_day = null;
         if(night_and_day) {
-            im_day = KzedMap.allocateBufferedImage(KzedMap.tileWidth, KzedMap.tileHeight);
-            zim_day = KzedMap.allocateBufferedImage(KzedMap.tileWidth/2, KzedMap.tileHeight/2);
+            im_day = DynmapBufferedImage.allocateBufferedImage(KzedMap.tileWidth, KzedMap.tileHeight);
+            zim_day = DynmapBufferedImage.allocateBufferedImage(KzedMap.tileWidth/2, KzedMap.tileHeight/2);
         }
 
         int ix = KzedMap.anchorx + tile.px / 2 + tile.py / 2 - ((127-maximumHeight)/2);
@@ -213,8 +222,7 @@ public class DefaultTileRenderer implements MapTileRenderer {
         }
 
         /* Hand encoding and writing file off to MapManager */
-        KzedZoomedMapTile zmtile = new KzedZoomedMapTile(tile.getDynmapWorld(),
-                (KzedMap) tile.getMap(), tile);
+        KzedZoomedMapTile zmtile = new KzedZoomedMapTile(tile.getDynmapWorld(), tile);
         File zoomFile = MapManager.mapman.getTileFile(zmtile);
 
         doFileWrites(outputFile, tile, im, im_day, zmtile, zoomFile, zim, zim_day, !isempty);
@@ -247,38 +255,41 @@ public class DefaultTileRenderer implements MapTileRenderer {
     }
 
     private void doFileWrites(final File fname, final KzedMapTile mtile,
-        final KzedBufferedImage img, final KzedBufferedImage img_day, 
+        final DynmapBufferedImage img, final DynmapBufferedImage img_day, 
         final KzedZoomedMapTile zmtile, final File zoomFile,
-        final KzedBufferedImage zimg, final KzedBufferedImage zimg_day, boolean rendered) {
+        final DynmapBufferedImage zimg, final DynmapBufferedImage zimg_day, boolean rendered) {
 
         /* Get coordinates of zoomed tile */
         int ox = (mtile.px == zmtile.getTileX())?0:KzedMap.tileWidth/2;
         int oy = (mtile.py == zmtile.getTileY())?0:KzedMap.tileHeight/2;
 
         /* Test to see if we're unchanged from older tile */
-        FileLockManager.getWriteLock(fname);
         TileHashManager hashman = MapManager.mapman.hashman;
         long crc = hashman.calculateTileHash(img.argb_buf);
         boolean updated_fname = false;
         int tx = mtile.px/KzedMap.tileWidth;
         int ty = mtile.py/KzedMap.tileHeight;
-        if((!fname.exists()) || (crc != hashman.getImageHashCode(mtile.getKey(), null, tx, ty))) {
-            Debug.debug("saving image " + fname.getPath());
-            if(!fname.getParentFile().exists())
-                fname.getParentFile().mkdirs();
-            try {
-                FileLockManager.imageIOWrite(img.buf_img, "png", fname);
-            } catch (IOException e) {
-                Debug.error("Failed to save image: " + fname.getPath(), e);
-            } catch (java.lang.NullPointerException e) {
-                Debug.error("Failed to save image (NullPointerException): " + fname.getPath(), e);
+        FileLockManager.getWriteLock(fname);
+        try {
+            if((!fname.exists()) || (crc != hashman.getImageHashCode(mtile.getKey(), null, tx, ty))) {
+                Debug.debug("saving image " + fname.getPath());
+                if(!fname.getParentFile().exists())
+                    fname.getParentFile().mkdirs();
+                try {
+                    FileLockManager.imageIOWrite(img.buf_img, "png", fname);
+                } catch (IOException e) {
+                    Debug.error("Failed to save image: " + fname.getPath(), e);
+                } catch (java.lang.NullPointerException e) {
+                    Debug.error("Failed to save image (NullPointerException): " + fname.getPath(), e);
+                }
+                MapManager.mapman.pushUpdate(mtile.getWorld(), new Client.Tile(mtile.getFilename()));
+                hashman.updateHashCode(mtile.getKey(), null, tx, ty, crc);
+                updated_fname = true;
             }
-            MapManager.mapman.pushUpdate(mtile.getWorld(), new Client.Tile(mtile.getFilename()));
-            hashman.updateHashCode(mtile.getKey(), null, tx, ty, crc);
-            updated_fname = true;
+        } finally {
+            FileLockManager.releaseWriteLock(fname);
+            DynmapBufferedImage.freeBufferedImage(img);
         }
-        KzedMap.freeBufferedImage(img);
-        FileLockManager.releaseWriteLock(fname);
         MapManager.mapman.updateStatistics(mtile, null, true, updated_fname, !rendered);
 
         mtile.file = fname;
@@ -287,25 +298,28 @@ public class DefaultTileRenderer implements MapTileRenderer {
         
         File dfname = new File(mtile.getDynmapWorld().worldtilepath, mtile.getDayFilename());
         if(img_day != null) {
-            FileLockManager.getWriteLock(dfname);
             crc = hashman.calculateTileHash(img.argb_buf);
-            if((!dfname.exists()) || (crc != hashman.getImageHashCode(mtile.getKey(), "day", tx, ty))) {
-                Debug.debug("saving image " + dfname.getPath());
-                if(!dfname.getParentFile().exists())
-                    dfname.getParentFile().mkdirs();
-                try {
-                    FileLockManager.imageIOWrite(img_day.buf_img, "png", dfname);
-                } catch (IOException e) {
-                    Debug.error("Failed to save image: " + dfname.getPath(), e);
-                } catch (java.lang.NullPointerException e) {
-                    Debug.error("Failed to save image (NullPointerException): " + dfname.getPath(), e);
+            FileLockManager.getWriteLock(dfname);
+            try {
+                if((!dfname.exists()) || (crc != hashman.getImageHashCode(mtile.getKey(), "day", tx, ty))) {
+                    Debug.debug("saving image " + dfname.getPath());
+                    if(!dfname.getParentFile().exists())
+                        dfname.getParentFile().mkdirs();
+                    try {
+                        FileLockManager.imageIOWrite(img_day.buf_img, "png", dfname);
+                    } catch (IOException e) {
+                        Debug.error("Failed to save image: " + dfname.getPath(), e);
+                    } catch (java.lang.NullPointerException e) {
+                        Debug.error("Failed to save image (NullPointerException): " + dfname.getPath(), e);
+                    }
+                    MapManager.mapman.pushUpdate(mtile.getWorld(), new Client.Tile(mtile.getDayFilename()));
+                    hashman.updateHashCode(mtile.getKey(), "day", tx, ty, crc);
+                    updated_dfname = true;
                 }
-                MapManager.mapman.pushUpdate(mtile.getWorld(), new Client.Tile(mtile.getDayFilename()));
-                hashman.updateHashCode(mtile.getKey(), "day", tx, ty, crc);
-                updated_dfname = true;
+            } finally {
+                FileLockManager.releaseWriteLock(dfname);
+                DynmapBufferedImage.freeBufferedImage(img_day);
             }
-            KzedMap.freeBufferedImage(img_day);
-            FileLockManager.releaseWriteLock(dfname);
             MapManager.mapman.updateStatistics(mtile, "day", true, updated_dfname, !rendered);
         }
         
@@ -313,38 +327,44 @@ public class DefaultTileRenderer implements MapTileRenderer {
         // make the zoomed tile here
         boolean ztile_updated = false;
         FileLockManager.getWriteLock(zoomFile);
-        if(updated_fname || (!zoomFile.exists())) {
-            saveZoomedTile(zmtile, zoomFile, zimg, ox, oy, null);
-            MapManager.mapman.pushUpdate(zmtile.getWorld(),
+        try {
+            if(updated_fname || (!zoomFile.exists())) {
+                saveZoomedTile(zmtile, zoomFile, zimg, ox, oy, null);
+                MapManager.mapman.pushUpdate(zmtile.getWorld(),
                                          new Client.Tile(zmtile.getFilename()));
-            zmtile.getDynmapWorld().enqueueZoomOutUpdate(zoomFile);
-            ztile_updated = true;
+                zmtile.getDynmapWorld().enqueueZoomOutUpdate(zoomFile);
+                ztile_updated = true;
+            }
+        } finally {
+            FileLockManager.releaseWriteLock(zoomFile);
+            DynmapBufferedImage.freeBufferedImage(zimg);
         }
-        KzedMap.freeBufferedImage(zimg);
-        FileLockManager.releaseWriteLock(zoomFile);
         MapManager.mapman.updateStatistics(zmtile, null, true, ztile_updated, !rendered);
         
         if(zimg_day != null) {
             File zoomFile_day = new File(zmtile.getDynmapWorld().worldtilepath, zmtile.getDayFilename());
             ztile_updated = false;
             FileLockManager.getWriteLock(zoomFile_day);
-            if(updated_dfname || (!zoomFile_day.exists())) {
-                saveZoomedTile(zmtile, zoomFile_day, zimg_day, ox, oy, "day");
-                MapManager.mapman.pushUpdate(zmtile.getWorld(),
+            try {
+                if(updated_dfname || (!zoomFile_day.exists())) {
+                    saveZoomedTile(zmtile, zoomFile_day, zimg_day, ox, oy, "day");
+                    MapManager.mapman.pushUpdate(zmtile.getWorld(),
                                              new Client.Tile(zmtile.getDayFilename()));            
-                zmtile.getDynmapWorld().enqueueZoomOutUpdate(zoomFile_day);
-                ztile_updated = true;
+                    zmtile.getDynmapWorld().enqueueZoomOutUpdate(zoomFile_day);
+                    ztile_updated = true;
+                }
+            } finally {
+                FileLockManager.releaseWriteLock(zoomFile_day);
+                DynmapBufferedImage.freeBufferedImage(zimg_day);
             }
-            KzedMap.freeBufferedImage(zimg_day);
-            FileLockManager.releaseWriteLock(zoomFile_day);
             MapManager.mapman.updateStatistics(zmtile, "day", true, ztile_updated, !rendered);
         }
     }
 
     private void saveZoomedTile(final KzedZoomedMapTile zmtile, final File zoomFile,
-            final KzedBufferedImage zimg, int ox, int oy, String subkey) {
+            final DynmapBufferedImage zimg, int ox, int oy, String subkey) {
         BufferedImage zIm = null;
-        KzedBufferedImage kzIm = null;
+        DynmapBufferedImage kzIm = null;
         try {
             zIm = ImageIO.read(zoomFile);
         } catch (IOException e) {
@@ -354,7 +374,7 @@ public class DefaultTileRenderer implements MapTileRenderer {
         boolean zIm_allocated = false;
         if (zIm == null) {
             /* create new one */
-            kzIm = KzedMap.allocateBufferedImage(KzedMap.tileWidth, KzedMap.tileHeight);
+            kzIm = DynmapBufferedImage.allocateBufferedImage(KzedMap.tileWidth, KzedMap.tileHeight);
             zIm = kzIm.buf_img;
             zIm_allocated = true;
             Debug.debug("New zoom-out tile created " + zmtile.getFilename());
@@ -379,7 +399,7 @@ public class DefaultTileRenderer implements MapTileRenderer {
         }
 
         if(zIm_allocated)
-            KzedMap.freeBufferedImage(kzIm);
+            DynmapBufferedImage.freeBufferedImage(kzIm);
         else
             zIm.flush();
 
@@ -430,18 +450,7 @@ public class DefaultTileRenderer implements MapTileRenderer {
                 }
                 if((shadowscale != null) && (mapiter.getY() < 127)) {
                     /* Find light level of previous chunk */
-                    switch(seq) {
-                        case 0:
-                        case 2:
-                            mapiter.incrementY();
-                            break;
-                        case 1:
-                            mapiter.incrementX();
-                            break;
-                        case 3:
-                            mapiter.decrementZ();
-                            break;
-                    }
+                    BlockStep last = mapiter.unstepPosition();
                     lightlevel = lightlevel_day = mapiter.getBlockSkyLight();
                     if(lightscale != null)
                         lightlevel = lightscale[lightlevel];
@@ -450,34 +459,23 @@ public class DefaultTileRenderer implements MapTileRenderer {
                         lightlevel = Math.max(emitted, lightlevel);                                
                         lightlevel_day = Math.max(emitted, lightlevel_day);                                
                     }
-                    switch(seq) {
-                        case 0:
-                        case 2:
-                            mapiter.decrementY();
-                            break;
-                        case 1:
-                            mapiter.decrementX();
-                            break;
-                        case 3:
-                            mapiter.incrementZ();
-                            break;
-                    }
+                    mapiter.stepPosition(last);
                 }
             }
             
             switch (seq) {
-            case 0:
-                mapiter.decrementX();
-                break;
-            case 1:
-            case 3:
-                mapiter.decrementY();
-                break;
-            case 2:
-                mapiter.incrementZ();
-                break;
+                case 0:
+                    mapiter.stepPosition(BlockStep.X_MINUS);
+                    break;
+                case 1:
+                case 3:
+                    mapiter.stepPosition(BlockStep.Y_MINUS);
+                    break;
+                case 2:
+                    mapiter.stepPosition(BlockStep.Z_PLUS);
+                    break;
             }
-
+            
             seq = (seq + 1) & 3;
 
             if (id != 0) {
@@ -575,7 +573,7 @@ public class DefaultTileRenderer implements MapTileRenderer {
     }
 
     @Override
-    public void buildClientConfiguration(JSONObject worldObject) {
+    public void buildClientConfiguration(JSONObject worldObject, DynmapWorld world, KzedMap map) {
         ConfigurationNode c = configuration;
         JSONObject o = new JSONObject();
         s(o, "type", "KzedMapType");
@@ -587,6 +585,10 @@ public class DefaultTileRenderer implements MapTileRenderer {
         s(o, "nightandday", c.getBoolean("night-and-day", false));
         s(o, "backgroundday", c.getString("backgroundday"));
         s(o, "backgroundnight", c.getString("backgroundnight"));
+        s(o, "bigmap", map.isBigWorldMap(world));
+        s(o, "mapzoomin", c.getInteger("mapzoomin", 2));
+        s(o, "mapzoomout", world.getExtraZoomOutLevels()+1);
+        s(o, "compassview", "SE");   /* Always from southeast */
         a(worldObject, "maps", o);
     }
 }

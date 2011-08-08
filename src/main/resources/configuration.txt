@@ -1,0 +1,196 @@
+# All paths in this configuration file are relative to Dynmap's data-folder: minecraft_server/plugins/dynmap/
+
+# All map templates are defined in the templates directory
+# By default, the 'classic' FlatMap and KzedMap templates are used, which can be found in normal.txt, nether.txt, and skylands.txt
+#
+# To use the HDMap low-res map templates as world defaults (normal-lowres, nether-lowres and skylands-lowres), uncomment the following line
+#   The definitions of these templates are in normal-lowres.txt, nether-lowres.txt, and skylands-lowres.txt
+#deftemplatesuffix: lowres
+# To use the HDMap hi-res map templates (these can take a VERY long time for initial fullrender), comment the following line
+#   The definitions of these templates are in normal-hires.txt, nether-hires.txt, and skylands-hires.txt
+#deftemplatesuffix: hires
+# Other values will search for templates named normal-<value>, nether-<value>, skylands-<value>
+
+components:
+  - class: org.dynmap.ClientConfigurationComponent
+  
+  - class: org.dynmap.InternalClientUpdateComponent
+    sendhealth: true
+    sendposition: true
+    allowwebchat: true
+    webchat-interval: 5
+    hidewebchatip: false
+    trustclientname: false
+  #- class: org.dynmap.JsonFileClientUpdateComponent
+  #  writeinterval: 1
+  #  sendhealth: true
+  #  sendposition: true
+  #  allowwebchat: false
+  #  webchat-interval: 5
+  #  hidewebchatip: false
+  
+  - class: org.dynmap.SimpleWebChatComponent
+    allowchat: true
+  #- class: org.dynmap.herochat.HeroWebChatComponent
+  #  # Control which HeroChat channel messages from web are directed to 
+  #  herochatwebchannel: Global
+  #  # Control which channels are monitored and reported to the web
+  #  herochatchannels:
+  #    - Global
+  #    #- Trade
+  #    #- Haggle
+  
+  - class: org.dynmap.ClientComponent
+    type: chat
+  - class: org.dynmap.ClientComponent
+    type: chatballoon
+    focuschatballoons: false
+  - class: org.dynmap.ClientComponent
+    type: chatbox
+    showplayerfaces: true
+    messagettl: 5
+  - class: org.dynmap.ClientComponent
+    type: playermarkers
+    showplayerfaces: true
+    showplayerhealth: true
+    # Option to make player faces small - don't use with showplayerhealth
+    smallplayerfaces: false
+  #- class: org.dynmap.ClientComponent
+  #  type: digitalclock
+  - class: org.dynmap.ClientComponent
+    type: timeofdayclock
+    showdigitalclock: true
+    #showweather: true
+  #- class: org.dynmap.ClientComponent
+  #  type: logo
+  #  text: "Dynmap"
+  #  linkurl: "http://forums.bukkit.org/threads/dynmap.489/"
+  #- class: org.dynmap.regions.RegionsComponent
+  #  type: regions
+  #  name: WorldGuard
+  #  useworldpath: true
+  #  filename: regions.yml
+  #  basenode: regions
+  #  use3dregions: true
+  #  regionstyle:
+  #    stroke: true
+  #    color: "#FF0000"
+  #    opacity: 0.8
+  #    weight: 3
+  #    fill: true
+  #    fillColor: "#FF0000"
+  #    fillOpacity: 0.35
+  #  # Optional setting to limit which regions to show, by name - if commented out, all regions are shown
+  #  visibleregions:
+  #    - homebase
+  #    - miningsite
+  #- class: org.dynmap.regions.RegionsComponent
+  #  type: regions
+  #  name: Residence
+  #  useworldpath: false
+  #  filename: res.yml
+  #  basenode: Residences
+  #  use3dregions: false
+  #  infowindow: '<div class="infowindow"><span style="font-size:120%;">%regionname%</span><br /> Owner <span style="font-weight:bold;">%playerowners%</span><br />Flags<br /><span style="font-weight:bold;">%flags%</span></div>'
+  #  regionstyle:
+  #    strokeColor: "#FF0000"
+  #    strokeOpacity: 0.8
+  #    strokeWeight: 3
+  #    fillColor: "#FF0000"
+  #    fillOpacity: 0.35
+  #  # Optional setting to limit which regions to show, by name - if commented out, all regions are shown
+  #  visibleregions:
+  #    - homebase
+  #    - miningsite
+  #- class: org.dynmap.TestComponent
+  #  stuff: "This is some configuration-value"
+
+# Treat hiddenplayers.txt as a whitelist for players to be shown on the map? (Default false)
+display-whitelist: false
+
+# How often a tile gets rendered (in seconds).
+renderinterval: 1
+
+# Zoom-out tile update period - how often to scan for and process tile updates into zoom-out tiles (in seconds)
+zoomoutperiod: 60
+
+# Tile hashing is used to minimize tile file updates when no changes have occurred - set to false to disable
+enabletilehash: true
+
+render-triggers:
+  #- chunkloaded
+  #- playermove
+  #- playerjoin
+  - blockplaced
+  - blockbreak
+  - leavesdecay
+  - blockburn
+  - chunkgenerated
+  - blockformed
+  - blockfaded
+  - blockspread
+
+# The path where the tile-files are placed.
+tilespath: web/tiles
+
+# The path where the web-files are located.
+webpath: web
+
+# The network-interface the webserver will bind to (0.0.0.0 for all interfaces, 127.0.0.1 for only local access).
+webserver-bindaddress: 0.0.0.0
+
+# The TCP-port the webserver will listen on.
+webserver-port: 8123
+
+# Maximum concurrent session on internal web server - limits resources used in Bukkit server
+max-sessions: 30
+
+# Disables Webserver portion of Dynmap (Advanced users only)
+disable-webserver: false
+
+# Enable/disable having the web server allow symbolic links (true=compatible with existing code, false=more secure (default))
+allow-symlinks: true
+
+# Period between tile renders for fullrender, in seconds (non-zero to pace fullrenders, lessen CPU load)
+timesliceinterval: 0.0
+
+# Maximum chunk loads per server tick (1/20th of a second) - reducing this below 90 will impact render performance, but also will reduce server thread load
+maxchunkspertick: 200
+
+# Interval the browser should poll for updates.
+updaterate: 2000
+
+showplayerfacesinmenu: true
+
+# Set sidebaropened: true to pin menu sidebar opened
+#sidebaropened: true
+
+joinmessage: "%playername% joined"
+quitmessage: "%playername% quit"
+spammessage: "You may only chat once every %interval% seconds."
+# webprefix and websuffix support using '&color;' as escape code for color code
+webprefix: "&color;2[WEB] "
+websuffix: "&color;f"
+# Enable checking for banned IPs via banned-ips.txt (internal web server only)
+check-banned-ips: true
+
+# Default selection when map page is loaded
+defaultzoom: 0
+defaultworld: world
+defaultmap: flat
+
+# NOTE: the 'templates' section is now found in the 'templates' directory
+#  Templates CAN still be defined in configuration.txt, as before 0.20
+templates:
+
+# NOTE: the 'worlds' section is now found in the worlds.txt (example custom settings can be found in worlds.txt.sample)
+#  Worlds CAN still be defined in configuration.txt, as before 0.20
+worlds:
+
+# Set to true to enable verbose startup messages - can help with debugging map configuration problems
+# Set to false for a much quieter startup log
+verbose: false
+
+# Enables debugging.
+#debuggers:
+#  - class: org.dynmap.debug.LogDebugger

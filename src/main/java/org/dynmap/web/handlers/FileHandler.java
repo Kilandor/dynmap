@@ -6,6 +6,7 @@ import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Map;
+import java.util.logging.Logger;
 
 import org.dynmap.web.HttpField;
 import org.dynmap.web.HttpHandler;
@@ -14,9 +15,8 @@ import org.dynmap.web.HttpResponse;
 import org.dynmap.web.HttpStatus;
 
 public abstract class FileHandler implements HttpHandler {
-    //BUG-this breaks re-entrancy of this handler, which is called from multiple threads (one per request)
-    //private byte[] readBuffer = new byte[40960];
-    //Replace with pool of buffers
+    protected static final Logger log = Logger.getLogger("Minecraft");
+
     private LinkedList<byte[]> bufferpool = new LinkedList<byte[]>();
     private Object lock = new Object();
     private static final int MAX_FREE_IN_POOL = 2;
@@ -56,7 +56,7 @@ public abstract class FileHandler implements HttpHandler {
         if (qmark >= 0)
             path = path.substring(0, qmark);
 
-        if (path.startsWith("/") || path.startsWith(".") || path.contains(".."))
+        if (path.startsWith("/") || path.startsWith("."))
             return null;
         if (path.length() == 0)
             path = getDefaultFilename(path);
@@ -108,20 +108,13 @@ public abstract class FileHandler implements HttpHandler {
                 while ((readBytes = fileInput.read(readBuffer)) > 0) {
                     out.write(readBuffer, 0, readBytes);
                 }
-            } catch (IOException e) {
-                throw e;
             } finally {
                 freeReadBuffer(readBuffer);
-                if(fileInput != null) {
-                    closeFileInput(path, fileInput);
-                    fileInput = null;
-                }
             }
-        } catch (Exception e) {
+        } finally {
             if (fileInput != null) {
                 try { closeFileInput(path, fileInput); fileInput = null; } catch (IOException ex) { }
             }
-            throw e;
         }
     }
 }

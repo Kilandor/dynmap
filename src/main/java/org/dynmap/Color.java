@@ -32,7 +32,7 @@ public class Color {
         return ((val >> 24) & 0xFF);
     }
     public final boolean isTransparent() {
-        return (val == TRANSPARENT);
+        return ((val & 0xFF000000) == TRANSPARENT);
     }
     public final void setTransparent() {
         val = TRANSPARENT;
@@ -51,5 +51,24 @@ public class Color {
     }
     public final int getComponent(int idx) {
         return 0xFF & (val >> ((3-idx)*8));
+    }
+    public final void setAlpha(int v) {
+        val = (val & 0x00FFFFFF) | (v << 24);
+    }
+    /**
+     * Scale each color component, based on the corresponding component
+     */
+    public final void blendColor(Color c) {
+        blendColor(c.val);
+    }
+    /**
+     * Scale each color component, based on the corresponding component
+     */
+    public final void blendColor(int argb) {
+        int nval = (((((val >> 24) & 0xFF) * ((argb >> 24) & 0xFF)) / 255) << 24);
+        nval = nval | (((((val >> 16) & 0xFF) * ((argb >> 16) & 0xFF)) / 255) << 16);
+        nval = nval | (((((val >> 8) & 0xFF) * ((argb >> 8) & 0xFF)) / 255) << 8);
+        nval = nval | (((val & 0xFF) * (argb & 0xFF)) / 255);
+        val = nval;
     }
 }

@@ -16,6 +16,7 @@ import org.dynmap.DynmapPlugin;
 import org.dynmap.DynmapWorld;
 import org.dynmap.Log;
 import org.dynmap.MapManager;
+import org.dynmap.utils.MapIterator.BlockStep;
 
 /**
  * Container for managing chunks - dependent upon using chunk snapshots, since rendering is off server thread
@@ -25,6 +26,8 @@ public class NewMapChunkCache implements MapChunkCache {
     private static Method poppreservedchunk = null;
     private static Method getsnapshot2 = null;
     private static Method getemptysnapshot = null;
+    private static Method gethandle = null;
+    private static Method removeentities = null;
     
     private World w;
     private List<DynmapChunk> chunks;
@@ -40,13 +43,19 @@ public class NewMapChunkCache implements MapChunkCache {
     private boolean isempty = true;
 
     private ChunkSnapshot[] snaparray; /* Index = (x-x_min) + ((z-z_min)*x_dim) */
-    
+
+    private static final BlockStep unstep[] = { BlockStep.X_MINUS, BlockStep.Y_MINUS, BlockStep.Z_MINUS,
+        BlockStep.X_PLUS, BlockStep.Y_PLUS, BlockStep.Z_PLUS };
+
     /**
      * Iterator for traversing map chunk cache (base is for non-snapshot)
      */
     public class OurMapIterator implements MapIterator {
-        private int x, y, z;  
+        private int x, y, z, chunkindex, bx, bz;  
         private ChunkSnapshot snap;
+        private BlockStep laststep;
+        private int typeid = -1;
+        private int blkdata = -1;
 
         OurMapIterator(int x0, int y0, int z0) {
             initialize(x0, y0, z0);
@@ -55,87 +64,166 @@ public class NewMapChunkCache implements MapChunkCache {
             this.x = x0;
             this.y = y0;
             this.z = z0;
+            this.chunkindex = ((x >> 4) - x_min) + (((z >> 4) - z_min) * x_dim);
+            this.bx = x & 0xF;
+            this.bz = z & 0xF;
             try {
-                snap = snaparray[((x>>4) - x_min) + ((z>>4) - z_min) * x_dim];
+                snap = snaparray[chunkindex];
             } catch (ArrayIndexOutOfBoundsException aioobx) {
                 snap = EMPTY;
             }
+            laststep = BlockStep.Y_MINUS;
+            typeid = blkdata = -1;
         }
         public final int getBlockTypeID() {
-            return snap.getBlockTypeId(x & 0xF, y, z & 0xF);
+            if(typeid < 0)
+                typeid = snap.getBlockTypeId(bx, y, bz);
+            return typeid;
         }
         public final int getBlockData() {
-            return snap.getBlockData(x & 0xF, y, z & 0xF);
+            if(blkdata < 0)
+                blkdata = snap.getBlockData(bx, y, bz);
+            return blkdata;
         }
         public final int getHighestBlockYAt() {
-            return snap.getHighestBlockYAt(x & 0xF, z & 0xF);
+            return snap.getHighestBlockYAt(bx, bz);
         }
         public final int getBlockSkyLight() {
-            return snap.getBlockSkyLight(x & 0xF, y, z & 0xF);
+            return snap.getBlockSkyLight(bx, y, bz);
         }
         public final int getBlockEmittedLight() {
-            return snap.getBlockEmittedLight(x & 0xF, y, z & 0xF);
+            return snap.getBlockEmittedLight(bx, y, bz);
         }
         public Biome getBiome() {
-            return snap.getBiome(x & 0xF, z & 0xF);
+            return snap.getBiome(bx, bz);
         }
         public double getRawBiomeTemperature() {
-            return snap.getRawBiomeTemperature(x & 0xf, z & 0xf);
+            return snap.getRawBiomeTemperature(bx, bz);
         }
         public double getRawBiomeRainfall() {
-            return snap.getRawBiomeRainfall(x & 0xf, z & 0xf);
+            return snap.getRawBiomeRainfall(bx, bz);
         }
-        public final void incrementX() {
-            x++;
-            if((x & 0xF) == 0) {  /* Next chunk? */
-                try {
-                    snap = snaparray[((x>>4) - x_min) + ((z>>4) - z_min) * x_dim];
-                } catch (ArrayIndexOutOfBoundsException aioobx) {
-                    snap = EMPTY;
-                }
+        /**
+         * Step current position in given direction
+         */
+        public final void stepPosition(BlockStep step) {
+            switch(step.ordinal()) {
+                case 0:
+                    x++;
+                    bx++;
+                    if(bx == 16) {  /* Next chunk? */
+                        try {
+                            bx = 0;
+                            chunkindex++;
+                            snap = snaparray[chunkindex];
+                        } catch (ArrayIndexOutOfBoundsException aioobx) {
+                            snap = EMPTY;
+                        }
+                    }
+                    break;
+                case 1:
+                    y++;
+                    break;
+                case 2:
+                    z++;
+                    bz++;
+                    if(bz == 16) {  /* Next chunk? */
+                        try {
+                            bz = 0;
+                            chunkindex += x_dim;
+                            snap = snaparray[chunkindex];
+                        } catch (ArrayIndexOutOfBoundsException aioobx) {
+                            snap = EMPTY;
+                        }
+                    }
+                    break;
+                case 3:
+                    x--;
+                    bx--;
+                    if(bx == -1) {  /* Next chunk? */
+                        try {
+                            bx = 15;
+                            chunkindex--;
+                            snap = snaparray[chunkindex];
+                        } catch (ArrayIndexOutOfBoundsException aioobx) {
+                            snap = EMPTY;
+                        }
+                    }
+                    break;
+                case 4:
+                    y--;
+                    break;
+                case 5:
+                    z--;
+                    bz--;
+                    if(bz == -1) {  /* Next chunk? */
+                        try {
+                            bz = 15;
+                            chunkindex -= x_dim;
+                            snap = snaparray[chunkindex];
+                        } catch (ArrayIndexOutOfBoundsException aioobx) {
+                            snap = EMPTY;
+                        }
+                    }
+                    break;
             }
+            laststep = step;
+            typeid = -1;
+            blkdata = -1;
         }
-        public final void decrementX() {
-            x--;
-            if((x & 0xF) == 15) {  /* Next chunk? */
-                try {
-                    snap = snaparray[((x>>4) - x_min) + ((z>>4) - z_min) * x_dim];
-                } catch (ArrayIndexOutOfBoundsException aioobx) {
-                    snap = EMPTY;
-                }
-            }
+        /**
+         * Unstep current position to previous position
+         */
+        public BlockStep unstepPosition() {
+            BlockStep ls = laststep;
+            stepPosition(unstep[ls.ordinal()]);
+            return ls;
         }
-        public final void incrementY() {
-            y++;
-        }
-        public final void decrementY() {
-            y--;
-        }
-        public final void incrementZ() {
-            z++;
-            if((z & 0xF) == 0) {  /* Next chunk? */
-                try {
-                    snap = snaparray[((x>>4) - x_min) + ((z>>4) - z_min) * x_dim];
-                } catch (ArrayIndexOutOfBoundsException aioobx) {
-                    snap = EMPTY;
-                }
-            }
-        }
-        public final void decrementZ() {
-            z--;
-            if((z & 0xF) == 15) {  /* Next chunk? */
-                try {
-                    snap = snaparray[((x>>4) - x_min) + ((z>>4) - z_min) * x_dim];
-                } catch (ArrayIndexOutOfBoundsException aioobx) {
-                    snap = EMPTY;
-                }
-            }
+        /**
+         * Unstep current position in oppisite director of given step
+         */
+        public void unstepPosition(BlockStep s) {
+            stepPosition(unstep[s.ordinal()]);
         }
         public final void setY(int y) {
+            if(y > this.y)
+                laststep = BlockStep.Y_PLUS;
+            else
+                laststep = BlockStep.Y_MINUS;
             this.y = y;
+            typeid = -1;
+            blkdata = -1;
+        }
+        public final int getX() {
+            return x;
         }
         public final int getY() {
             return y;
+        }
+        public final int getZ() {
+            return z;
+        }
+        public final int getBlockTypeIDAt(BlockStep s) {
+            if(s == BlockStep.Y_MINUS) {
+                if(y > 0)
+                    return snap.getBlockTypeId(bx, y-1, bz);
+            }
+            else if(s == BlockStep.Y_PLUS) {
+                if(y < 127)
+                    return snap.getBlockTypeId(bx, y+1, bz);
+            }
+            else {
+                BlockStep ls = laststep;
+                stepPosition(s);
+                int tid = snap.getBlockTypeId(bx, y, bz);
+                unstepPosition();
+                laststep = ls;
+                return tid;
+            }
+            return 0;
+        }
+        public BlockStep getLastStep() {
+            return laststep;
         }
      }
 
@@ -230,17 +318,21 @@ public class NewMapChunkCache implements MapChunkCache {
             } catch (ClassNotFoundException cnfx) {
             } catch (NoSuchMethodException nsmx) {
             }
-            /* Get CraftChunk.getChunkSnapshot(boolean,boolean,boolean) */
+            /* Get CraftChunk.getChunkSnapshot(boolean,boolean,boolean) and CraftChunk.getHandle() */
             try {
                 Class c = Class.forName("org.bukkit.craftbukkit.CraftChunk");
                 getsnapshot2 = c.getDeclaredMethod("getChunkSnapshot", new Class[] { boolean.class, boolean.class, boolean.class });
+                gethandle = c.getDeclaredMethod("getHandle", new Class[0]);
             } catch (ClassNotFoundException cnfx) {
             } catch (NoSuchMethodException nsmx) {
             }
-            if(getsnapshot2 != null)
-                Log.info("Biome data support is enabled");
-            else
-                Log.info("Biome data support is disabled");
+            /* Get Chunk.removeEntities() */
+            try {
+                Class c = Class.forName("net.minecraft.server.Chunk");
+                removeentities = c.getDeclaredMethod("removeEntities", new Class[0]);
+            } catch (ClassNotFoundException cnfx) {
+            } catch (NoSuchMethodException nsmx) {
+            }
             init = true;
         }
     }
@@ -303,6 +395,20 @@ public class NewMapChunkCache implements MapChunkCache {
                     }
                 }
             }
+            /* Check if cached chunk snapshot found */
+            ChunkSnapshot ss = MapManager.mapman.sscache.getSnapshot(w.getName(), chunk.x, chunk.z, blockdata, biome, biomeraw, highesty); 
+            if(ss != null) {
+                if(!vis) {
+                    if(hidestyle == HiddenChunkStyle.FILL_STONE_PLAIN)
+                        ss = STONE;
+                    else if(hidestyle == HiddenChunkStyle.FILL_OCEAN)
+                        ss = OCEAN;
+                    else
+                        ss = EMPTY;
+                }
+                snaparray[(chunk.x-x_min) + (chunk.z - z_min)*x_dim] = ss;
+                continue;
+            }
             boolean wasLoaded = w.isChunkLoaded(chunk.x, chunk.z);
             boolean didload = w.loadChunk(chunk.x, chunk.z, false);
             boolean didgenerate = false;
@@ -311,7 +417,6 @@ public class NewMapChunkCache implements MapChunkCache {
                 didgenerate = didload = w.loadChunk(chunk.x, chunk.z, true);
             /* If it did load, make cache of it */
             if(didload) {
-                ChunkSnapshot ss = null;
                 if(!vis) {
                     if(hidestyle == HiddenChunkStyle.FILL_STONE_PLAIN)
                         ss = STONE;
@@ -335,17 +440,34 @@ public class NewMapChunkCache implements MapChunkCache {
                     }
                     else
                         ss = c.getChunkSnapshot();
+                    if(ss != null)
+                        MapManager.mapman.sscache.putSnapshot(w.getName(), chunk.x, chunk.z, ss, blockdata, biome, biomeraw, highesty);
                 }
                 snaparray[(chunk.x-x_min) + (chunk.z - z_min)*x_dim] = ss;
             }
             if ((!wasLoaded) && didload) {
                 /* It looks like bukkit "leaks" entities - they don't get removed from the world-level table
                  * when chunks are unloaded but not saved - removing them seems to do the trick */
-                if(!didgenerate) {
+                if(!(didgenerate && do_save)) {
+                    boolean did_remove = false;
                     Chunk cc = w.getChunkAt(chunk.x, chunk.z);
-                    if(cc != null) {
-                        for(Entity e: cc.getEntities())
-                            e.remove();
+                    if((gethandle != null) && (removeentities != null)) {
+                        try {
+                            Object chk = gethandle.invoke(cc);
+                            if(chk != null) {
+                                removeentities.invoke(chk);
+                                did_remove = true;
+                            }
+                        } catch (InvocationTargetException itx) {
+                        } catch (IllegalArgumentException e) {
+                        } catch (IllegalAccessException e) {
+                        }
+                    }
+                    if(!did_remove) {
+                        if(cc != null) {
+                            for(Entity e: cc.getEntities())
+                                e.remove();
+                        }
                     }
                 }
                 /* Since we only remember ones we loaded, and we're synchronous, no player has
@@ -507,4 +629,9 @@ public class NewMapChunkCache implements MapChunkCache {
         this.blockdata = blockdata;
         return true;
     }
+    @Override
+    public World getWorld() {
+        return w;
+    }
+
 }

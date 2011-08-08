@@ -24,7 +24,8 @@ function createMinecraftHead(player,completed,failed) {
 		headCanvas.height = 8;
 		var headContext = headCanvas.getContext('2d');
 		blitImage(headContext, skinImage,  8,8,8,8, 0,0,8,8);
-		blitImage(headContext, skinImage, 40,8,8,8, 0,0,8,8);
+		// Turn off accessory face overlay - causes white faces, and very few skins seem to have them anyway
+		//blitImage(headContext, skinImage, 40,8,8,8, 0,0,8,8);
 		completed(headCanvas);
 	};
 	skinImage.onerror = function() {

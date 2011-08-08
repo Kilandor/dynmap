@@ -6,6 +6,7 @@ import static org.dynmap.JSONUtils.s;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import javax.imageio.ImageIO;
@@ -22,17 +23,20 @@ import org.dynmap.MapManager;
 import org.dynmap.TileHashManager;
 import org.dynmap.MapTile;
 import org.dynmap.MapType;
+import org.dynmap.MapType.MapStep;
 import org.dynmap.debug.Debug;
 import org.dynmap.kzedmap.KzedMap;
-import org.dynmap.kzedmap.KzedMap.KzedBufferedImage;
+import org.dynmap.utils.DynmapBufferedImage;
 import org.dynmap.utils.FileLockManager;
 import org.dynmap.utils.MapChunkCache;
 import org.dynmap.utils.MapIterator;
+import org.dynmap.utils.MapIterator.BlockStep;
 import org.json.simple.JSONObject;
 
 public class FlatMap extends MapType {
     private ConfigurationNode configuration;
     private String prefix;
+    private String name;
     private ColorScheme colorScheme;
     private int maximumHeight = 127;
     private int ambientlight = 15;;
@@ -41,10 +45,12 @@ public class FlatMap extends MapType {
     protected boolean transparency;
     private enum Texture { NONE, SMOOTH, DITHER };
     private Texture textured = Texture.NONE;
+    private boolean isbigmap;
     
     public FlatMap(ConfigurationNode configuration) {
         this.configuration = configuration;
-        prefix = (String) configuration.get("prefix");
+        name = configuration.getString("name", null);
+        prefix = configuration.getString("prefix", name);
         colorScheme = ColorScheme.getScheme((String) configuration.get("colorscheme"));
         Object o = configuration.get("maximumheight");
         if (o != null) {
@@ -80,6 +86,7 @@ public class FlatMap extends MapType {
             textured = Texture.DITHER;
         else
             textured = Texture.SMOOTH;
+        isbigmap = configuration.getBoolean("isbigmap", false);
     }
 
     @Override
@@ -118,11 +125,6 @@ public class FlatMap extends MapType {
     }
 
     @Override
-    public boolean isHightestBlockYDataNeeded() {
-        return true;
-    }
-
-    @Override
     public boolean render(MapChunkCache cache, MapTile tile, File outputFile) {
         FlatMapTile t = (FlatMapTile) tile;
         World w = t.getWorld();
@@ -132,24 +134,24 @@ public class FlatMap extends MapType {
         Color rslt = new Color();
         int[] pixel = new int[4];
         int[] pixel_day = null;
-        KzedBufferedImage im = KzedMap.allocateBufferedImage(t.size, t.size);
+        DynmapBufferedImage im = DynmapBufferedImage.allocateBufferedImage(t.size, t.size);
         int[] argb_buf = im.argb_buf;
-        KzedBufferedImage im_day = null;
+        DynmapBufferedImage im_day = null;
         int[] argb_buf_day = null;
         if(night_and_day) {
-            im_day = KzedMap.allocateBufferedImage(t.size, t.size);
+            im_day = DynmapBufferedImage.allocateBufferedImage(t.size, t.size);
             argb_buf_day = im_day.argb_buf;
             pixel_day = new int[4];
         }
         MapIterator mapiter = cache.getIterator(t.x * t.size, 127, t.y * t.size);
         for (int x = 0; x < t.size; x++) {
             mapiter.initialize(t.x * t.size + x, 127, t.y * t.size);
-            for (int y = 0; y < t.size; y++, mapiter.incrementZ()) {
+            for (int y = 0; y < t.size; y++, mapiter.stepPosition(BlockStep.Z_PLUS)) {
                 int blockType;
                 mapiter.setY(127);
                 if(isnether) {
                     while((blockType = mapiter.getBlockTypeID()) != 0) {
-                        mapiter.decrementY();
+                        mapiter.stepPosition(BlockStep.Y_MINUS);
                         if(mapiter.getY() < 0) {    /* Solid - use top */
                             mapiter.setY(127);
                             blockType = mapiter.getBlockTypeID();
@@ -158,7 +160,7 @@ public class FlatMap extends MapType {
                     }
                     if(blockType == 0) {    /* Hit air - now find non-air */
                         while((blockType = mapiter.getBlockTypeID()) == 0) {
-                            mapiter.decrementY();
+                            mapiter.stepPosition(BlockStep.Y_MINUS);
                             if(mapiter.getY() < 0) {
                                 mapiter.setY(0);
                                 break;
@@ -211,7 +213,7 @@ public class FlatMap extends MapType {
                 /* If ambient light less than 15, do scaling */
                 else if((shadowscale != null) && (ambientlight < 15)) {
                     if(mapiter.getY() < 127) 
-                        mapiter.incrementY();
+                        mapiter.stepPosition(BlockStep.Y_PLUS);
                     if(night_and_day) { /* Use unscaled color for day (no shadows from above) */
                         pixel_day[0] = pixel[0];    
                         pixel_day[1] = pixel[1];
@@ -271,61 +273,67 @@ public class FlatMap extends MapType {
             }
         }
         /* Test to see if we're unchanged from older tile */
-        FileLockManager.getWriteLock(outputFile);
         TileHashManager hashman = MapManager.mapman.hashman;
         long crc = hashman.calculateTileHash(argb_buf);
         boolean tile_update = false;
-        if((!outputFile.exists()) || (crc != hashman.getImageHashCode(tile.getKey(), null, t.x, t.y))) {
-            /* Wrap buffer as buffered image */
-            Debug.debug("saving image " + outputFile.getPath());
-            if(!outputFile.getParentFile().exists())
-                outputFile.getParentFile().mkdirs();
-            try {
-                FileLockManager.imageIOWrite(im.buf_img, "png", outputFile);
-            } catch (IOException e) {
-                Debug.error("Failed to save image: " + outputFile.getPath(), e);
-            } catch (java.lang.NullPointerException e) {
-                Debug.error("Failed to save image (NullPointerException): " + outputFile.getPath(), e);
+        FileLockManager.getWriteLock(outputFile);
+        try {
+            if((!outputFile.exists()) || (crc != hashman.getImageHashCode(tile.getKey(), null, t.x, t.y))) {
+                /* Wrap buffer as buffered image */
+                Debug.debug("saving image " + outputFile.getPath());
+                if(!outputFile.getParentFile().exists())
+                    outputFile.getParentFile().mkdirs();
+                try {
+                    FileLockManager.imageIOWrite(im.buf_img, "png", outputFile);
+                } catch (IOException e) {
+                    Debug.error("Failed to save image: " + outputFile.getPath(), e);
+                } catch (java.lang.NullPointerException e) {
+                    Debug.error("Failed to save image (NullPointerException): " + outputFile.getPath(), e);
+                }
+                MapManager.mapman.pushUpdate(tile.getWorld(), new Client.Tile(tile.getFilename()));
+                hashman.updateHashCode(tile.getKey(), null, t.x, t.y, crc);
+                tile.getDynmapWorld().enqueueZoomOutUpdate(outputFile);
+                tile_update = true;
             }
-            MapManager.mapman.pushUpdate(tile.getWorld(), new Client.Tile(tile.getFilename()));
-            hashman.updateHashCode(tile.getKey(), null, t.x, t.y, crc);
-            tile.getDynmapWorld().enqueueZoomOutUpdate(outputFile);
-            tile_update = true;
+            else {
+                Debug.debug("skipping image " + outputFile.getPath() + " - hash match");
+            }
+        } finally {
+            FileLockManager.releaseWriteLock(outputFile);
+            DynmapBufferedImage.freeBufferedImage(im);
         }
-        else {
-            Debug.debug("skipping image " + outputFile.getPath() + " - hash match");
-        }
-        KzedMap.freeBufferedImage(im);
-        FileLockManager.releaseWriteLock(outputFile);
         MapManager.mapman.updateStatistics(tile, null, true, tile_update, !rendered);
 
         /* If day too, handle it */
         if(night_and_day) {
             File dayfile = new File(tile.getDynmapWorld().worldtilepath, tile.getDayFilename());
-            FileLockManager.getWriteLock(dayfile);
             crc = hashman.calculateTileHash(argb_buf_day);
-            if((!dayfile.exists()) || (crc != hashman.getImageHashCode(tile.getKey(), "day", t.x, t.y))) {
-                Debug.debug("saving image " + dayfile.getPath());
-                if(!dayfile.getParentFile().exists())
-                    dayfile.getParentFile().mkdirs();
-                try {
-                    FileLockManager.imageIOWrite(im_day.buf_img, "png", dayfile);
-                } catch (IOException e) {
-                    Debug.error("Failed to save image: " + dayfile.getPath(), e);
-                } catch (java.lang.NullPointerException e) {
-                    Debug.error("Failed to save image (NullPointerException): " + dayfile.getPath(), e);
+            FileLockManager.getWriteLock(dayfile);
+            try {
+                if((!dayfile.exists()) || (crc != hashman.getImageHashCode(tile.getKey(), "day", t.x, t.y))) {
+                    Debug.debug("saving image " + dayfile.getPath());
+                    if(!dayfile.getParentFile().exists())
+                        dayfile.getParentFile().mkdirs();
+                    try {
+                        FileLockManager.imageIOWrite(im_day.buf_img, "png", dayfile);
+                    } catch (IOException e) {
+                        Debug.error("Failed to save image: " + dayfile.getPath(), e);
+                    } catch (java.lang.NullPointerException e) {
+                        Debug.error("Failed to save image (NullPointerException): " + dayfile.getPath(), e);
+                    }
+                    MapManager.mapman.pushUpdate(tile.getWorld(), new Client.Tile(tile.getDayFilename()));   
+                    hashman.updateHashCode(tile.getKey(), "day", t.x, t.y, crc);
+                    tile.getDynmapWorld().enqueueZoomOutUpdate(dayfile);
+                    tile_update = true;
                 }
-                MapManager.mapman.pushUpdate(tile.getWorld(), new Client.Tile(tile.getDayFilename()));   
-                hashman.updateHashCode(tile.getKey(), "day", t.x, t.y, crc);
-                tile.getDynmapWorld().enqueueZoomOutUpdate(dayfile);
-                tile_update = true;
+                else {
+                    Debug.debug("skipping image " + dayfile.getPath() + " - hash match");
+                    tile_update = false;
+                }
+            } finally {
+                FileLockManager.releaseWriteLock(dayfile);
+                DynmapBufferedImage.freeBufferedImage(im_day);
             }
-            else {
-                Debug.debug("skipping image " + dayfile.getPath() + " - hash match");
-                tile_update = false;
-            }
-            KzedMap.freeBufferedImage(im_day);
-            FileLockManager.releaseWriteLock(dayfile);
             MapManager.mapman.updateStatistics(tile, "day", true, tile_update, !rendered);
         }
         
@@ -344,7 +352,7 @@ public class FlatMap extends MapType {
         if((shadowscale != null) && (ambientlight < 15)) {
             boolean did_inc = false;
             if(mapiter.getY() < 127) {
-                mapiter.incrementY();
+                mapiter.stepPosition(BlockStep.Y_PLUS);
                 did_inc = true;
             }
             if(night_and_day) { /* Use unscaled color for day (no shadows from above) */
@@ -355,13 +363,13 @@ public class FlatMap extends MapType {
             g = (g * shadowscale[light]) >> 8;
             b = (b * shadowscale[light]) >> 8;
             if(did_inc)
-                mapiter.decrementY();
+                mapiter.stepPosition(BlockStep.Y_MINUS);
         }
         if(a < 255) {   /* If not opaque */
             pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0;
             if(pixel_day != null) 
                 pixel_day[0] = pixel_day[1] = pixel_day[2] = pixel_day[3] = 0;
-            mapiter.decrementY();
+            mapiter.stepPosition(BlockStep.Y_MINUS);
             if(mapiter.getY() >= 0) {
                 int blockType = mapiter.getBlockTypeID();
                 int data = 0;
@@ -405,14 +413,28 @@ public class FlatMap extends MapType {
     }
 
     public String getName() {
+        return name;
+    }
+    
+    public String getPrefix() {
         return prefix;
+    }
+    
+    /* Get maps rendered concurrently with this map in this world */
+    public List<MapType> getMapsSharingRender(DynmapWorld w) {
+        return Collections.singletonList((MapType)this);
+    }
+
+    /* Get names of maps rendered concurrently with this map type in this world */
+    public List<String> getMapNamesSharingRender(DynmapWorld w) {
+        return Collections.singletonList(name);
     }
 
     public List<String> baseZoomFilePrefixes() {
         ArrayList<String> s = new ArrayList<String>();
-        s.add(getName() + "_128");
+        s.add(getPrefix() + "_128");
         if(night_and_day)
-            s.add(getName()+"_day_128");
+            s.add(getPrefix()+"_day_128");
         return s;
     }
     
@@ -420,10 +442,18 @@ public class FlatMap extends MapType {
 
     private static final int[] stepseq = { 1, 3, 0, 2 };
     
+    public MapStep zoomFileMapStep() { return MapStep.X_PLUS_Y_PLUS; }
+
     public int[] zoomFileStepSequence() { return stepseq; }
 
     /* How many bits of coordinate are shifted off to make big world directory name */
     public int getBigWorldShift() { return 5; }
+
+    /* Returns true if big world file structure is in effect for this map */
+    @Override
+    public boolean isBigWorldMap(DynmapWorld w) {
+        return w.bigworld || isbigmap;
+    }
 
     public static class FlatMapTile extends MapTile {
         FlatMap map;
@@ -434,7 +464,7 @@ public class FlatMap extends MapType {
         private String fname_day;
 
         public FlatMapTile(DynmapWorld world, FlatMap map, int x, int y, int size) {
-            super(world, map);
+            super(world);
             this.map = map;
             this.x = x;
             this.y = y;
@@ -464,10 +494,35 @@ public class FlatMap extends MapType {
         public String toString() {
             return getWorld().getName() + ":" + getFilename();
         }
+
+        @Override
+        public boolean render(MapChunkCache cache) {
+            return map.render(cache, this, MapManager.mapman.getTileFile(this));
+        }
+
+        @Override
+        public List<DynmapChunk> getRequiredChunks() {
+            return map.getRequiredChunks(this);
+        }
+
+        @Override
+        public MapTile[] getAdjecentTiles() {
+            return map.getAdjecentTiles(this);
+        }
+
+        @Override
+        public String getKey() {
+            return world.world.getName() + "." + map.getPrefix();
+        }
+        
+        public boolean isHightestBlockYDataNeeded() { return true; }
+        public boolean isBiomeDataNeeded() { return false; }
+        public boolean isRawBiomeDataNeeded() { return false; }
+        public boolean isBlockTypeDataNeeded() { return true; }
     }
     
     @Override
-    public void buildClientConfiguration(JSONObject worldObject) {
+    public void buildClientConfiguration(JSONObject worldObject, DynmapWorld world) {
         ConfigurationNode c = configuration;
         JSONObject o = new JSONObject();
         s(o, "type", "FlatMapType");
@@ -479,6 +534,10 @@ public class FlatMap extends MapType {
         s(o, "nightandday", c.getBoolean("night-and-day",false));
         s(o, "backgroundday", c.getString("backgroundday"));
         s(o, "backgroundnight", c.getString("backgroundnight"));
+        s(o, "bigmap", this.isBigWorldMap(world));
+        s(o, "mapzoomin", c.getInteger("mapzoomin", 3));
+        s(o, "mapzoomout", world.getExtraZoomOutLevels());
+        s(o, "compassview", "S");   /* Always from south */
         a(worldObject, "maps", o);
     }
 }

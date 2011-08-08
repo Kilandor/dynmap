@@ -1,8 +1,14 @@
 package org.dynmap.kzedmap;
 
+import org.dynmap.DynmapChunk;
 import org.dynmap.DynmapWorld;
+import org.dynmap.MapManager;
+
 import java.io.File;
+import java.util.List;
+
 import org.dynmap.MapTile;
+import org.dynmap.utils.MapChunkCache;
 
 public class KzedMapTile extends MapTile {
     public KzedMap map;
@@ -15,7 +21,7 @@ public class KzedMapTile extends MapTile {
     public File file = null;
 
     public KzedMapTile(DynmapWorld world, KzedMap map, MapTileRenderer renderer, int px, int py) {
-        super(world, map);
+        super(world);
         this.map = map;
         this.renderer = renderer;
         this.px = px;
@@ -25,10 +31,10 @@ public class KzedMapTile extends MapTile {
     @Override
     public String getFilename() {
         if(fname == null) {
-            if(world.bigworld)        
-                fname = renderer.getName() + "/"  + (px >> 12) + '_' + (py >> 12) + '/' + px + "_" + py + ".png";
+            if(map.isBigWorldMap(world))        
+                fname = renderer.getPrefix() + "/"  + (px >> 12) + '_' + (py >> 12) + '/' + px + "_" + py + ".png";
             else
-                fname = renderer.getName() + "_" + px + "_" + py + ".png";            
+                fname = renderer.getPrefix() + "_" + px + "_" + py + ".png";            
         }
         return fname;
     }
@@ -36,10 +42,10 @@ public class KzedMapTile extends MapTile {
     @Override
     public String getDayFilename() {
         if(fname_day == null) {
-            if(world.bigworld)        
-                fname_day = renderer.getName() + "_day/"  + (px >> 12) + '_' + (py >> 12) + '/' + px + "_" + py + ".png";
+            if(map.isBigWorldMap(world))        
+                fname_day = renderer.getPrefix() + "_day/"  + (px >> 12) + '_' + (py >> 12) + '/' + px + "_" + py + ".png";
             else
-                fname_day = renderer.getName() + "_day_" + px + "_" + py + ".png";            
+                fname_day = renderer.getPrefix() + "_day_" + px + "_" + py + ".png";            
         }
         return fname_day;
     }
@@ -62,10 +68,28 @@ public class KzedMapTile extends MapTile {
     }
 
     public String getKey() {
-        return getWorld().getName() + "." + renderer.getName();
+        return getWorld().getName() + "." + renderer.getPrefix();
     }
 
     public String toString() {
         return getWorld().getName() + ":" + getFilename();
     }
+    
+    public boolean render(MapChunkCache cache) {
+        return map.render(cache, this, MapManager.mapman.getTileFile(this));
+    }
+    
+    public List<DynmapChunk> getRequiredChunks() {
+        return map.getRequiredChunks(this);
+    }
+    
+    public MapTile[] getAdjecentTiles() {
+        return map.getAdjecentTiles(this);
+    }
+    
+    public boolean isBiomeDataNeeded() { return map.isBiomeDataNeeded(); }
+    public boolean isHightestBlockYDataNeeded() { return false; }
+    public boolean isRawBiomeDataNeeded() { return map.isRawBiomeDataNeeded(); }
+    public boolean isBlockTypeDataNeeded() { return true; }
+
 }
