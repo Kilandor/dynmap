@@ -52,7 +52,7 @@ public class KzedMapTile extends MapTile {
 
     @Override
     public int hashCode() {
-        return getFilename().hashCode() ^ getWorld().hashCode();
+        return px ^ py ^ map.getName().hashCode() ^ getWorld().getName().hashCode();
     }
 
     @Override
@@ -60,11 +60,11 @@ public class KzedMapTile extends MapTile {
         if (obj instanceof KzedMapTile) {
             return equals((KzedMapTile) obj);
         }
-        return super.equals(obj);
+        return false;
     }
 
     public boolean equals(KzedMapTile o) {
-        return o.px == px && o.py == py && o.getWorld().equals(getWorld());
+        return o.px == px && o.py == py && (o.map == map) && (o.getWorld() == getWorld());
     }
 
     public String getKey() {
@@ -75,7 +75,7 @@ public class KzedMapTile extends MapTile {
         return getWorld().getName() + ":" + getFilename();
     }
     
-    public boolean render(MapChunkCache cache) {
+    public boolean render(MapChunkCache cache, String mapname) {
         return map.render(cache, this, MapManager.mapman.getTileFile(this));
     }
     
@@ -91,5 +91,6 @@ public class KzedMapTile extends MapTile {
     public boolean isHightestBlockYDataNeeded() { return false; }
     public boolean isRawBiomeDataNeeded() { return map.isRawBiomeDataNeeded(); }
     public boolean isBlockTypeDataNeeded() { return true; }
-
+    public int tileOrdinalX() { return px >> 7; }
+    public int tileOrdinalY() { return py >> 7; }
 }

@@ -3,6 +3,7 @@
 
 var componentconstructors = {};
 var maptypes = {};
+var map = null;	// Leaflet assumes top-level 'map'...
 
 componentconstructors['testcomponent'] = function(dynmap, configuration) {
 	console.log('initialize');
@@ -126,6 +127,7 @@ DynMap.prototype = {
 				return (1 << zoom);
 			}
 		});
+		window.map = map; // Placate Leaflet need for top-level 'map'....
 		
 		map.zoom_changed = function() {
 			me.maptype.updateTileSize(me.map.zoom);
@@ -244,7 +246,7 @@ DynMap.prototype = {
 		
 		var updateHeight = function() {
 			playerlist.height(sidebar.innerHeight() - (playerlist.offset().top - worldlist.offset().top) - 64); // here we need a fix to avoid the static value, but it works fine this way :P
-			var scrollable = playerlist.scrollHeight() < playerlist.height();
+			var scrollable = playerlist.scrollHeight() > playerlist.height();
 			upbtn.toggle(scrollable);
 			downbtn.toggle(scrollable);
 		};

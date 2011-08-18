@@ -13,12 +13,14 @@ public interface HDPerspective {
     String getName();
     /* Get tiles invalidated by change at given location */
     MapTile[] getTiles(Location loc);
+    /* Get tiles invalidated by change at given volume, defined by 2 opposite corner locations */
+    MapTile[] getTiles(Location loc0, Location loc1);
     /* Get tiles adjacent to given tile */
     MapTile[] getAdjecentTiles(MapTile tile);
     /* Get chunks needed for given tile */
     List<DynmapChunk> getRequiredChunks(MapTile tile);
     /* Render given tile */
-    boolean render(MapChunkCache cache, HDMapTile tile);
+    boolean render(MapChunkCache cache, HDMapTile tile, String mapname);
     
     public boolean isBiomeDataNeeded();
     public boolean isHightestBlockYDataNeeded();

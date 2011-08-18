@@ -19,6 +19,8 @@ import java.util.Set;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.World.Environment;
+import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -27,6 +29,8 @@ import org.bukkit.event.block.BlockBurnEvent;
 import org.bukkit.event.block.BlockFadeEvent;
 import org.bukkit.event.block.BlockFormEvent;
 import org.bukkit.event.block.BlockListener;
+import org.bukkit.event.block.BlockPistonExtendEvent;
+import org.bukkit.event.block.BlockPistonRetractEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.block.BlockSpreadEvent;
 import org.bukkit.event.block.LeavesDecayEvent;
@@ -332,7 +336,8 @@ public class DynmapPlugin extends JavaPlugin {
     private boolean onblockspread;
     private boolean onleaves;
     private boolean onburn;
-
+    private boolean onpiston;
+    
     public void registerEvents() {
         final PluginManager pm = getServer().getPluginManager();
         final MapManager mm = mapManager;
@@ -345,97 +350,135 @@ public class DynmapPlugin extends JavaPlugin {
                 public void onBlockPlace(BlockPlaceEvent event) {
                     if(event.isCancelled())
                         return;
-                    if(onplace)
-                        mm.touch(event.getBlockPlaced().getLocation());
-                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
+                    Location loc = event.getBlock().getLocation();
+                    mm.sscache.invalidateSnapshot(loc);
+                    if(onplace) {
+                        mm.touch(loc);
+                    }
                 }
 
                 @Override
                 public void onBlockBreak(BlockBreakEvent event) {
                     if(event.isCancelled())
                         return;
-                    if(onbreak)
-                        mm.touch(event.getBlock().getLocation());
-                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
+                    Location loc = event.getBlock().getLocation();
+                    mm.sscache.invalidateSnapshot(loc);
+                    if(onbreak) {
+                        mm.touch(loc);
+                    }
                 }
 
                 @Override
                 public void onLeavesDecay(LeavesDecayEvent event) {
                     if(event.isCancelled())
                         return;
-                    if(onleaves)
-                        mm.touch(event.getBlock().getLocation());              
-                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
+                    Location loc = event.getBlock().getLocation();
+                    mm.sscache.invalidateSnapshot(loc);
+                    if(onleaves) {
+                        mm.touch(loc);              
+                    }
                 }
                 
                 @Override
                 public void onBlockBurn(BlockBurnEvent event) {
                     if(event.isCancelled())
                         return;
-                    if(onburn)
-                        mm.touch(event.getBlock().getLocation());
-                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
+                    Location loc = event.getBlock().getLocation();
+                    mm.sscache.invalidateSnapshot(loc);
+                    if(onburn) {
+                        mm.touch(loc);
+                    }
                 }
                 
                 @Override
                 public void onBlockForm(BlockFormEvent event) {
                     if(event.isCancelled())
                         return;
-                    if(onblockform)
-                        mm.touch(event.getBlock().getLocation());
-                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
+                    Location loc = event.getBlock().getLocation();
+                    mm.sscache.invalidateSnapshot(loc);
+                    if(onblockform) {
+                        mm.touch(loc);
+                    }
                 }
                 @Override
                 public void onBlockFade(BlockFadeEvent event) {
                     if(event.isCancelled())
                         return;
-                    if(onblockfade)
-                        mm.touch(event.getBlock().getLocation());
-                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
+                    Location loc = event.getBlock().getLocation();
+                    mm.sscache.invalidateSnapshot(loc);
+                    if(onblockfade) {
+                        mm.touch(loc);
+                    }
                 }
                 @Override
                 public void onBlockSpread(BlockSpreadEvent event) {
                     if(event.isCancelled())
                         return;
-                    if(onblockspread)
-                        mm.touch(event.getBlock().getLocation());
-                    mm.sscache.invalidateSnapshot(event.getBlock().getLocation());
+                    Location loc = event.getBlock().getLocation();
+                    mm.sscache.invalidateSnapshot(loc);
+                    if(onblockspread) {
+                        mm.touch(loc);
+                    }
+                }
+                @Override
+                public void onBlockPistonRetract(BlockPistonRetractEvent event) {
+                    if(event.isCancelled())
+                        return;
+                    Block b = event.getBlock();
+                    Location loc = b.getLocation();
+                    mm.sscache.invalidateSnapshot(loc);
+                    BlockFace dir = event.getDirection();
+                    if(onpiston) {
+                        mm.touchVolume(loc, b.getRelative(dir, 2).getLocation());
+                    }
+                    for(int i = 0; i < 2; i++) {
+                        b = b.getRelative(dir, 1);
+                        mm.sscache.invalidateSnapshot(b.getLocation());
+                    }
+                }
+                @Override
+                public void onBlockPistonExtend(BlockPistonExtendEvent event) {
+                    if(event.isCancelled())
+                        return;
+                    Block b = event.getBlock();
+                    Location loc = b.getLocation();
+                    mm.sscache.invalidateSnapshot(loc);
+                    BlockFace dir = event.getDirection();
+                    if(onpiston) {
+                        mm.touchVolume(loc, b.getRelative(dir, 1+event.getLength()).getLocation());
+                    }
+                    for(int i = 0; i < 1+event.getLength(); i++) {
+                         b = b.getRelative(dir, 1);
+                         mm.sscache.invalidateSnapshot(b.getLocation());
+                    }
                 }
             };
             onplace = isTrigger("blockplaced");
             pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_PLACE, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            
             onbreak = isTrigger("blockbreak");
             pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_BREAK, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            
             if(isTrigger("snowform")) Log.info("The 'snowform' trigger has been deprecated due to Bukkit changes - use 'blockformed'");
+            
             onleaves = isTrigger("leavesdecay");
             pm.registerEvent(org.bukkit.event.Event.Type.LEAVES_DECAY, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            
             onburn = isTrigger("blockburn");
             pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_BURN, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
 
             onblockform = isTrigger("blockformed");
-            try {
-                Class.forName("org.bukkit.event.block.BlockFormEvent");
-                pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_FORM, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
-            } catch (ClassNotFoundException cnfx) {
-                if(onblockform)
-                    Log.info("BLOCK_FORM event not supported by this version of CraftBukkit - event disabled");
-            }
+            pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_FORM, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            
             onblockfade = isTrigger("blockfaded");
-            try {
-                Class.forName("org.bukkit.event.block.BlockFadeEvent");
-                pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_FADE, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
-            } catch (ClassNotFoundException cnfx) {
-                if(onblockfade)
-                    Log.info("BLOCK_FADE event not supported by this version of CraftBukkit - event disabled");
-            }
+            pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_FADE, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            
             onblockspread = isTrigger("blockspread");
-            try {
-                Class.forName("org.bukkit.event.block.BlockSpreadEvent");
-                pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_SPREAD, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
-            } catch (ClassNotFoundException cnfx) {
-                if(onblockspread)
-                    Log.info("BLOCK_SPREAD event not supported by this version of CraftBukkit - event disabled");
-            }
+            pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_SPREAD, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+
+            onpiston = isTrigger("pistonmoved");
+            pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_PISTON_EXTEND, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
+            pm.registerEvent(org.bukkit.event.Event.Type.BLOCK_PISTON_RETRACT, renderTrigger, org.bukkit.event.Event.Priority.Monitor, this);
         }
         {
             PlayerListener renderTrigger = new PlayerListener() {
@@ -463,19 +506,11 @@ public class DynmapPlugin extends JavaPlugin {
                     if(generate_only) {
                         if(!isNewChunk(event))
                             return;
-                        /* Touch extreme corners */
-                        int x = event.getChunk().getX() * 16;
-                        int z = event.getChunk().getZ() * 16;
-                        mm.touch(new Location(event.getWorld(), x, 0, z));
-                        mm.touch(new Location(event.getWorld(), x+15, 127, z));
-                        mm.touch(new Location(event.getWorld(), x+15, 0, z+15));
-                        mm.touch(new Location(event.getWorld(), x, 127, z+15));
                     }
-                    else {
-                        int x = event.getChunk().getX() * 16 + 8;
-                        int z = event.getChunk().getZ() * 16 + 8;
-                        mm.touch(new Location(event.getWorld(), x, 127, z));
-                    }
+                    /* Touch extreme corners */
+                    int x = event.getChunk().getX() << 4;
+                    int z = event.getChunk().getZ() << 4;
+                    mm.touchVolume(new Location(event.getWorld(), x, 0, z), new Location(event.getWorld(), x+15, 127, z+15));
                 }
                 private boolean isNewChunk(ChunkLoadEvent event) {
                     return event.isNewChunk();
@@ -579,14 +614,17 @@ public class DynmapPlugin extends JavaPlugin {
             else if(c.equals("radiusrender") && checkPlayerPermission(sender,"radiusrender")) {
                 if (player != null) {
                     int radius = 0;
+                    String mapname = null;
                     if(args.length > 1) {
                         radius = Integer.parseInt(args[1]); /* Parse radius */
                         if(radius < 0)
                             radius = 0;
+                        if(args.length > 2)
+                            mapname = args[2];
                     }
                     Location loc = player.getLocation();
                     if(loc != null)
-                        mapManager.renderWorldRadius(loc, sender, radius);
+                        mapManager.renderWorldRadius(loc, sender, mapname, radius);
                 }
                 else {
                     sender.sendMessage("Command can only be issued by player.");
@@ -616,18 +654,30 @@ public class DynmapPlugin extends JavaPlugin {
                     }
                 }
             } else if (c.equals("fullrender") && checkPlayerPermission(sender,"fullrender")) {
+                String map = null;
                 if (args.length > 1) {
                     for (int i = 1; i < args.length; i++) {
-                        World w = getServer().getWorld(args[i]);
-                        if(w != null)
-                            mapManager.renderFullWorld(new Location(w, 0, 0, 0),sender);
+                        int dot = args[i].indexOf(":");
+                        DynmapWorld w;
+                        String wname = args[i];
+                        if(dot >= 0) {
+                            wname = args[i].substring(0, dot);
+                            map = args[i].substring(dot+1);
+                        }
+                        w = mapManager.getWorld(wname);
+                        if(w != null) {
+                            Location loc = new Location(w.world, w.configuration.getFloat("center/x", 0.0f), w.configuration.getFloat("center/y", 64f), w.configuration.getFloat("center/z", 0.0f));
+                            mapManager.renderFullWorld(loc,sender, map);
+                        }
                         else
-                            sender.sendMessage("World '" + args[i] + "' not defined/loaded");
+                            sender.sendMessage("World '" + wname + "' not defined/loaded");
                     }
                 } else if (player != null) {
                     Location loc = player.getLocation();
+                    if(args.length > 1)
+                        map = args[1];
                     if(loc != null)
-                        mapManager.renderFullWorld(loc, sender);
+                        mapManager.renderFullWorld(loc, sender, map);
                 } else {
                     sender.sendMessage("World name is required");
                 }

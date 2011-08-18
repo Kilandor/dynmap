@@ -18,11 +18,12 @@ componentconstructors['chatballoon'] = function(dynmap, configuration) {
 			return;
 		}
 		var player = dynmap.players[message.name];
+		if (!player)
+			return;
 		if (dynmap.world !== player.location.world) {
 			return;
 		}
 		var popupPosition = dynmap.getProjection().fromLocationToLatLng(player.location);
-		console.log('popupPosition', popupPosition);
 		var popup = me.chatpopups[message.name];
 		if (!popup) {
 			me.chatpopups[message.name] = popup = {

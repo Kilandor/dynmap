@@ -19,6 +19,7 @@ import org.dynmap.utils.MapChunkCache;
 import org.json.simple.JSONObject;
 
 public class HDMap extends MapType {
+
     private String name;
     private String prefix;
     private HDPerspective perspective;
@@ -26,6 +27,11 @@ public class HDMap extends MapType {
     private HDLighting lighting;
     private ConfigurationNode configuration;
     private int mapzoomout;
+    private MapType.ImageFormat imgformat;
+
+    public static final String IMGFORMAT_PNG = "png";
+    public static final String IMGFORMAT_JPG = "jpg";
+    
     
     public HDMap(ConfigurationNode configuration) {
         name = configuration.getString("name", null);
@@ -83,7 +89,19 @@ public class HDMap extends MapType {
             mapzoomout++;
             scale = scale / 2.0;
         }
-    }   
+        String fmt = configuration.getString("image-format", "png");
+        /* Only allow png or jpg */
+        for(ImageFormat f : ImageFormat.values()) {
+            if(fmt.equals(f.getID())) {
+                imgformat = f;
+                break;
+            }
+        }
+        if(imgformat == null) {
+            Log.severe("HDMap '"+name+"' set invalid image-format: " + fmt);
+            imgformat = ImageFormat.FORMAT_PNG;
+        }   
+    }
 
     public HDShader getShader() { return shader; }
     public HDPerspective getPerspective() { return perspective; }
@@ -95,6 +113,11 @@ public class HDMap extends MapType {
     }
 
     @Override
+    public MapTile[] getTiles(Location loc0, Location loc1) {
+        return perspective.getTiles(loc0, loc1);
+    }
+
+    @Override
     public MapTile[] getAdjecentTiles(MapTile tile) {
         return perspective.getAdjecentTiles(tile);
     }
@@ -102,14 +125,6 @@ public class HDMap extends MapType {
     @Override
     public List<DynmapChunk> getRequiredChunks(MapTile tile) {
         return perspective.getRequiredChunks(tile);
-    }
-
-    @Override
-    public boolean render(MapChunkCache cache, MapTile tile, File bogus) {
-        if(tile instanceof HDMapTile)
-            return perspective.render(cache, (HDMapTile)tile);
-        else
-            return false;
     }
 
     @Override
@@ -181,6 +196,8 @@ public class HDMap extends MapType {
         return lst;
     }
 
+    @Override
+    public ImageFormat getImageFormat() { return imgformat; }
     
     @Override
     public void buildClientConfiguration(JSONObject worldObject, DynmapWorld world) {
@@ -197,6 +214,7 @@ public class HDMap extends MapType {
         s(o, "bigmap", true);
         s(o, "mapzoomout", (world.getExtraZoomOutLevels()+mapzoomout));
         s(o, "mapzoomin", c.getInteger("mapzoomin", 2));
+        s(o, "image-format", imgformat.getFileExt());
         perspective.addClientConfiguration(o);
         shader.addClientConfiguration(o);
         lighting.addClientConfiguration(o);

@@ -10,7 +10,7 @@ import org.dynmap.utils.MapChunkCache;
 public abstract class MapTile {
     protected DynmapWorld world;
 
-    public abstract boolean render(MapChunkCache cache);
+    public abstract boolean render(MapChunkCache cache, String mapname);
     public abstract List<DynmapChunk> getRequiredChunks();
     public abstract MapTile[] getAdjecentTiles();
 
@@ -51,4 +51,7 @@ public abstract class MapTile {
     public abstract boolean isRawBiomeDataNeeded();
     public abstract boolean isBlockTypeDataNeeded();
 
+    public abstract int tileOrdinalX();
+    public abstract int tileOrdinalY();
+    
 }

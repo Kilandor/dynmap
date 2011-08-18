@@ -6,7 +6,6 @@ import java.util.List;
 import org.bukkit.World;
 import org.bukkit.Location;
 import org.dynmap.debug.Debug;
-import org.dynmap.kzedmap.KzedMap;
 import org.dynmap.utils.DynmapBufferedImage;
 import org.dynmap.utils.FileLockManager;
 import org.dynmap.utils.MapChunkCache;
@@ -32,6 +31,7 @@ public class DynmapWorld {
     public ConfigurationNode configuration;
     public List<Location> seedloc;
     public List<MapChunkCache.VisibilityLimit> visibility_limits;
+    public List<MapChunkCache.VisibilityLimit> hidden_limits;
     public AutoGenerateOption do_autogenerate;
     public MapChunkCache.HiddenChunkStyle hiddenchunkstyle;
     public int servertime;
@@ -104,11 +104,21 @@ public class DynmapWorld {
         }
     }
 
+    private static final String COORDSTART = "-0123456789";
     private static class PNGFileFilter implements FilenameFilter {
         String prefix;
-        public PNGFileFilter(String pre) { prefix = pre; }
+        String suffix;
+        public PNGFileFilter(String pre, MapType.ImageFormat fmt) {
+            if((pre != null) && (pre.length() > 0))
+                prefix = pre; 
+            suffix = "." + fmt.getFileExt();
+        }
         public boolean accept(File f, String n) {
-            if(n.endsWith(".png") && n.startsWith(prefix)) {
+            if(n.endsWith(suffix)) {
+                if((prefix != null) && (!n.startsWith(prefix)))
+                    return false;
+                if((prefix == null) && (COORDSTART.indexOf(n.charAt(0)) < 0))
+                    return false;
                 File fn = new File(f, n);
                 return fn.isFile();
             }
@@ -146,6 +156,7 @@ public class DynmapWorld {
         String zfnprefix;
         int bigworldshift;
         boolean isbigmap;
+        MapType.ImageFormat fmt;
     }
     
     public boolean freshenZoomOutFilesByLevel(int zoomlevel) {
@@ -252,6 +263,7 @@ public class DynmapWorld {
                 pd.zoomprefix = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".substring(0, zoomlevel);
                 pd.bigworldshift = bigworldshift;
                 pd.isbigmap = mt.isBigWorldMap(this);
+                pd.fmt = mt.getImageFormat();
                 if(pd.isbigmap) {
                     if(zoomlevel > 0) {
                         pd.zoomprefix += "_";
@@ -282,15 +294,15 @@ public class DynmapWorld {
 
     private String makeFilePath(PrefixData pd, int x, int y, boolean zoomed) {
         if(pd.isbigmap)
-            return pd.baseprefix + "/" + (x >> pd.bigworldshift) + "_" + (y >> pd.bigworldshift) + "/" + (zoomed?pd.zfnprefix:pd.fnprefix) + x + "_" + y + ".png";
+            return pd.baseprefix + "/" + (x >> pd.bigworldshift) + "_" + (y >> pd.bigworldshift) + "/" + (zoomed?pd.zfnprefix:pd.fnprefix) + x + "_" + y + "." + pd.fmt.getFileExt();
         else
-            return (zoomed?pd.zfnprefix:pd.fnprefix) + "_" + x + "_" + y + ".png";            
+            return (zoomed?pd.zfnprefix:pd.fnprefix) + "_" + x + "_" + y + "." + pd.fmt.getFileExt();            
     }
     
     private int processZoomDirectory(File dir, PrefixData pd) {
         Debug.debug("processZoomDirectory(" + dir.getPath() + "," + pd.baseprefix + ")");
         HashMap<String, ProcessTileRec> toprocess = new HashMap<String, ProcessTileRec>();
-        String[] files = dir.list(new PNGFileFilter(pd.fnprefix));
+        String[] files = dir.list(new PNGFileFilter(pd.fnprefix, pd.fmt));
         if(files == null)
             return 0;
         for(String fn : files) {
@@ -434,7 +446,7 @@ public class DynmapWorld {
                 try {
                     if(!zf.getParentFile().exists())
                         zf.getParentFile().mkdirs();
-                    FileLockManager.imageIOWrite(zIm, "png", zf);
+                    FileLockManager.imageIOWrite(zIm, pd.fmt, zf);
                     Debug.debug("Saved zoom-out tile at " + zf.getPath());
                 } catch (IOException e) {
                     Debug.error("Failed to save zoom-out tile: " + zf.getName(), e);

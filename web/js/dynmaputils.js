@@ -10,6 +10,40 @@ var DynmapProjection = L.Class.extend({
 	}
 });
 
+if (!Array.prototype.indexOf) {
+	    Array.prototype.indexOf = function (searchElement /*, fromIndex */ ) {
+	        "use strict";
+	        if (this === void 0 || this === null) {
+	            throw new TypeError();
+	        }
+	        var t = Object(this);
+	        var len = t.length >>> 0;
+	        if (len === 0) {
+	            return -1;
+	        }
+	        var n = 0;
+	        if (arguments.length > 0) {
+	            n = Number(arguments[1]);
+	            if (n !== n) { // shortcut for verifying if it's NaN
+	                n = 0;
+	            } else if (n !== 0 && n !== (1 / 0) && n !== -(1 / 0)) {
+	                n = (n > 0 || -1) * Math.floor(Math.abs(n));
+	            }
+	        }
+	        if (n >= len) {
+	            return -1;
+	        }
+	        var k = n >= 0 ? n : Math.max(len - Math.abs(n), 0);
+	        for (; k < len; k++) {
+	            if (k in t && t[k] === searchElement) {
+	                return k;
+	            }
+	        }
+	        return -1;
+	    }
+}
+
+	
 var DynmapTileLayer = L.TileLayer.extend({
 	_currentzoom: undefined,
 	getProjection: function() {
@@ -73,29 +107,74 @@ var DynmapTileLayer = L.TileLayer.extend({
 		
 		this._container.appendChild(fragment);
 	},
-	
-	// We should override this, since Leaflet does modulo on tilePoint by default. (https://github.com/CloudMade/Leaflet/blob/master/src/layer/tile/TileLayer.js#L151)
-	_addTile: function(tilePoint) {
-		if(this._container == null)	// Ignore if we're not active layer
-			return;
-			
+	//Copy and mod of Leaflet method - marked changes with Dynmap: to simplify reintegration
+	_addTile: function(tilePoint, container) {
 		var tilePos = this._getTilePos(tilePoint),
 			zoom = this._map.getZoom(),
 			key = tilePoint.x + ':' + tilePoint.y,
-			name = this.getTileName(tilePoint, zoom);
-
+			name = this.getTileName(tilePoint, zoom),	//Dynmap
+			tileLimit = (1 << zoom);
+			
+		// wrap tile coordinates
+		if (!this.options.continuousWorld) {
+			if (!this.options.noWrap) {
+				tilePoint.x = ((tilePoint.x % tileLimit) + tileLimit) % tileLimit;
+			} else if (tilePoint.x < 0 || tilePoint.x >= tileLimit) {
+				this._tilesToLoad--;
+				return;
+			}
+			
+			if (tilePoint.y < 0 || tilePoint.y >= tileLimit) {
+				this._tilesToLoad--;
+				return;
+			}
+		}
+		
 		// create tile
 		var tile = this._createTile();
-		tile.tileName = name;
-		tile.tilePoint = tilePoint;
+		tile.tileName = name;	//Dynmap
+		tile.tilePoint = tilePoint;	//Dynmap
 		L.DomUtil.setPosition(tile, tilePos);
-
+		
 		this._tiles[key] = tile;
-		this._namedTiles[name] = tile;
+		this._namedTiles[name] = tile;	//Dynmap
+        
+		if (this.options.scheme == 'tms') {
+			tilePoint.y = tileLimit - tilePoint.y - 1;
+		}
 
 		this._loadTile(tile, tilePoint, zoom);
-
-		this._container.appendChild(tile);
+		
+		container.appendChild(tile);
+	},
+	_loadTile: function(tile, tilePoint, zoom) {
+		var me = this;
+		tile._layer = this;
+		function done() {
+			me._loadingTiles.splice(me._loadingTiles.indexOf(tile), 1);
+			me._nextLoadTile();
+		}
+		tile.onload = function(e) {
+			me._tileOnLoad.apply(this, [e]);
+			done();
+		}
+		tile.onerror = function() {
+			me._tileOnError.apply(this);
+			done();
+		}
+		tile.loadSrc = function() {
+			me._loadingTiles.push(tile);
+			tile.src = me.getTileUrl(tilePoint, zoom);
+		};
+		this._loadQueue.push(tile);
+		this._nextLoadTile();
+	},
+	_nextLoadTile: function() {
+		if (this._loadingTiles.length > 4) { return; }
+		var next = this._loadQueue.shift();
+		if (!next) { return; }
+		
+		next.loadSrc();
 	},
 	
 	_removeOtherTiles: function(bounds) {
@@ -134,6 +213,8 @@ var DynmapTileLayer = L.TileLayer.extend({
 		this._updateTileSize();
 		this._tiles = {};
 		this._namedTiles = {};
+		this._loadQueue = [];
+		this._loadingTiles = [];
 		this._cachedTileUrls = {};
 		this._initContainer();
 		this._container.innerHTML = '';
@@ -195,7 +276,8 @@ var DynmapTileLayer = L.TileLayer.extend({
 			zoom: this.zoomprefix(zoomoutlevel),
 			zoomprefix: (zoomoutlevel==0)?"":(this.zoomprefix(zoomoutlevel)+"_"),
 			x: x,
-			y: y
+			y: y,
+			fmt: this.options['image-format'] || 'png'
 		};
 	}
 });

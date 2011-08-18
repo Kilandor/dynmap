@@ -3,6 +3,7 @@ package org.dynmap.hdmap;
 import org.dynmap.DynmapChunk;
 import org.dynmap.DynmapWorld;
 import org.dynmap.MapManager;
+import org.dynmap.MapType;
 
 import java.util.List;
 import org.dynmap.MapTile;
@@ -21,25 +22,25 @@ public class HDMapTile extends MapTile {
 
     @Override
     public String getFilename() {
-        return getFilename("hdmap");
+        return getFilename("hdmap", MapType.ImageFormat.FORMAT_PNG);
     }
 
-    public String getFilename(String prefix) {
-        return prefix + "/"  + (tx >> 5) + '_' + (ty >> 5) + '/' + tx + "_" + ty + ".png";
+    public String getFilename(String prefix, MapType.ImageFormat format) {
+        return prefix + "/"  + (tx >> 5) + '_' + (ty >> 5) + '/' + tx + "_" + ty + "." + format.getFileExt();
     }
 
     @Override
     public String getDayFilename() {
-        return getDayFilename("hdmap");
+        return getDayFilename("hdmap", MapType.ImageFormat.FORMAT_PNG);
     }
 
-    public String getDayFilename(String prefix) {
-        return prefix + "_day/"  + (tx >> 5) + '_' + (ty >> 5) + '/' + tx + "_" + ty + ".png";
+    public String getDayFilename(String prefix, MapType.ImageFormat format) {
+        return prefix + "_day/"  + (tx >> 5) + '_' + (ty >> 5) + '/' + tx + "_" + ty + "." + format.getFileExt();
     }
     
     @Override
     public int hashCode() {
-        return perspective.getName().hashCode() ^ getWorld().hashCode();
+        return tx ^ ty ^ perspective.getName().hashCode() ^ getWorld().getName().hashCode();
     }
 
     @Override
@@ -47,11 +48,11 @@ public class HDMapTile extends MapTile {
         if (obj instanceof HDMapTile) {
             return equals((HDMapTile) obj);
         }
-        return super.equals(obj);
+        return false;
     }
 
     public boolean equals(HDMapTile o) {
-        return o.tx == tx && o.ty == ty && o.getWorld().equals(getWorld()) && (perspective.equals(o.perspective));
+        return o.tx == tx && o.ty == ty && (perspective == o.perspective) && (o.getWorld() == getWorld());
     }
 
     public String getKey() {
@@ -75,8 +76,8 @@ public class HDMapTile extends MapTile {
     @Override
     public boolean isBlockTypeDataNeeded() { return MapManager.mapman.hdmapman.isBlockTypeDataNeeded(this); }
     
-    public boolean render(MapChunkCache cache) {
-        return perspective.render(cache, this);
+    public boolean render(MapChunkCache cache, String mapname) {
+        return perspective.render(cache, this, mapname);
     }
     
     public List<DynmapChunk> getRequiredChunks() {
@@ -86,4 +87,8 @@ public class HDMapTile extends MapTile {
     public MapTile[] getAdjecentTiles() {
         return perspective.getAdjecentTiles(this);
     }
+    
+    public int tileOrdinalX() { return tx; }
+    public int tileOrdinalY() { return ty; }
+
 }

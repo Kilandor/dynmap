@@ -29,6 +29,7 @@ import org.dynmap.utils.LegacyMapChunkCache;
 import org.dynmap.utils.MapChunkCache;
 import org.dynmap.utils.NewMapChunkCache;
 import org.dynmap.utils.SnapshotCache;
+import org.dynmap.utils.TileFlags;
 
 public class MapManager {
     public AsynchronousQueue<MapTile> tileQueue;
@@ -151,8 +152,8 @@ public class MapManager {
         Location loc;        
         int    map_index = -1;    /* Which map are we on */
         MapType map;
-        HashSet<MapTile> found = null;
-        HashSet<MapTile> rendered = null;
+        TileFlags found = null;
+        TileFlags rendered = null;
         LinkedList<MapTile> renderQueue = null;
         MapTile tile0 = null;
         MapTile tile = null;
@@ -166,19 +167,20 @@ public class MapManager {
         int cxmin, cxmax, czmin, czmax;
         String rendertype;
         boolean cancelled;
+        String mapname;
 
         /* Full world, all maps render */
-        FullWorldRenderState(DynmapWorld dworld, Location l, CommandSender sender) {
-            this(dworld, l, sender, -1);
+        FullWorldRenderState(DynmapWorld dworld, Location l, CommandSender sender, String mapname) {
+            this(dworld, l, sender, mapname, -1);
             rendertype = "Full render";
         }
         
         /* Full world, all maps render, with optional render radius */
-        FullWorldRenderState(DynmapWorld dworld, Location l, CommandSender sender, int radius) {
+        FullWorldRenderState(DynmapWorld dworld, Location l, CommandSender sender, String mapname, int radius) {
             world = dworld;
             loc = l;
-            found = new HashSet<MapTile>();
-            rendered = new HashSet<MapTile>();
+            found = new TileFlags();
+            rendered = new TileFlags();
             renderQueue = new LinkedList<MapTile>();
             this.sender = sender;
             if(radius < 0) {
@@ -193,6 +195,7 @@ public class MapManager {
                 czmax = (l.getBlockZ() + radius+15)>>4;
                 rendertype = "Radius render";
             }
+            this.mapname = mapname;
         }
 
         /* Single tile render - used for incremental renders */
@@ -240,8 +243,17 @@ public class MapManager {
                     /* Advance to next unrendered map */
                     while(map_index < world.maps.size()) {
                         map_index++;    /* Move to next one */
-                        if((map_index < world.maps.size()) && (renderedmaps.contains(world.maps.get(map_index)) == false))
-                            break;
+                        if(map_index >= world.maps.size()) break;
+                        /* If single map render, see if this is our target */
+                        if(mapname != null) {
+                            if(world.maps.get(map_index).getName().equals(mapname)) {
+                                break;
+                            }
+                        }
+                        else {
+                            if(renderedmaps.contains(world.maps.get(map_index)) == false)
+                                break;
+                        }
                     }
                     if(map_index >= world.maps.size()) {    /* Last one done? */
                         sender.sendMessage(rendertype + " of '" + world.world.getName() + "' finished.");
@@ -253,6 +265,8 @@ public class MapManager {
                     /* Build active map list */
                     activemaps = "";
                     for(String n : activemaplist) {
+                        if((mapname != null) && (!mapname.equals(n)))
+                            continue;
                         if(activemaps.length() > 0)
                             activemaps += ",";
                         activemaps += n;
@@ -262,16 +276,16 @@ public class MapManager {
 
                     /* Now, prime the render queue */
                     for (MapTile mt : map.getTiles(loc)) {
-                        if (!found.contains(mt)) {
-                            found.add(mt);
+                        if (!found.getFlag(mt.tileOrdinalX(), mt.tileOrdinalY())) {
+                            found.setFlag(mt.tileOrdinalX(), mt.tileOrdinalY(), true);
                             renderQueue.add(mt);
                         }
                     }
                     if(world.seedloc != null) {
                         for(Location seed : world.seedloc) {
                             for (MapTile mt : map.getTiles(seed)) {
-                                if (!found.contains(mt)) {
-                                    found.add(mt);
+                                if (!found.getFlag(mt.tileOrdinalX(),mt.tileOrdinalY())) {
+                                    found.setFlag(mt.tileOrdinalX(),mt.tileOrdinalY(), true);
                                     renderQueue.add(mt);
                                 }
                             }
@@ -307,22 +321,23 @@ public class MapManager {
             }
             if(tile0 != null) {    /* Single tile? */
                 if(cache.isEmpty() == false)
-                    tile.render(cache);
+                    tile.render(cache, null);
             }
             else {
             	/* Switch to not checking if rendered tile is blank - breaks us on skylands, where tiles can be nominally blank - just work off chunk cache empty */
                 if (cache.isEmpty() == false) {
-                	tile.render(cache);
-                    found.remove(tile);
-                    rendered.add(tile);
+                	tile.render(cache, mapname);
+                    found.setFlag(tile.tileOrdinalX(),tile.tileOrdinalY(),false);
+                    rendered.setFlag(tile.tileOrdinalX(), tile.tileOrdinalY(), true);
                     for (MapTile adjTile : map.getAdjecentTiles(tile)) {
-                        if (!found.contains(adjTile) && !rendered.contains(adjTile)) {
-                            found.add(adjTile);
+                        if (!found.getFlag(adjTile.tileOrdinalX(),adjTile.tileOrdinalY()) && 
+                                !rendered.getFlag(adjTile.tileOrdinalX(),adjTile.tileOrdinalY())) {
+                            found.setFlag(adjTile.tileOrdinalX(), adjTile.tileOrdinalY(), true);
                             renderQueue.add(adjTile);
                         }
                     }
                 }
-                found.remove(tile);
+                found.setFlag(tile.tileOrdinalX(), tile.tileOrdinalY(), false);
                 if(!cache.isEmpty()) {
                     rendercnt++;
                     timeaccum += System.currentTimeMillis() - tstart;
@@ -434,7 +449,7 @@ public class MapManager {
         }        
     }
 
-    void renderFullWorld(Location l, CommandSender sender) {
+    void renderFullWorld(Location l, CommandSender sender, String mapname) {
         DynmapWorld world = getWorld(l.getWorld().getName());
         if (world == null) {
             sender.sendMessage("Could not render: world '" + l.getWorld().getName() + "' not defined in configuration.");
@@ -448,7 +463,7 @@ public class MapManager {
                 sender.sendMessage(rndr.rendertype + " of world '" + wname + "' already active.");
                 return;
             }
-            rndr = new FullWorldRenderState(world,l,sender);    /* Make new activation record */
+            rndr = new FullWorldRenderState(world,l,sender, mapname);    /* Make new activation record */
             active_renders.put(wname, rndr);    /* Add to active table */
         }
         /* Schedule first tile to be worked */
@@ -457,7 +472,7 @@ public class MapManager {
         sender.sendMessage("Full render starting on world '" + wname + "'...");
     }
 
-    void renderWorldRadius(Location l, CommandSender sender, int radius) {
+    void renderWorldRadius(Location l, CommandSender sender, String mapname, int radius) {
         DynmapWorld world = getWorld(l.getWorld().getName());
         if (world == null) {
             sender.sendMessage("Could not render: world '" + l.getWorld().getName() + "' not defined in configuration.");
@@ -471,7 +486,7 @@ public class MapManager {
                 sender.sendMessage(rndr.rendertype + " of world '" + wname + "' already active.");
                 return;
             }
-            rndr = new FullWorldRenderState(world,l,sender, radius);    /* Make new activation record */
+            rndr = new FullWorldRenderState(world,l,sender, mapname, radius);    /* Make new activation record */
             active_renders.put(wname, rndr);    /* Add to active table */
         }
         /* Schedule first tile to be worked */
@@ -550,6 +565,19 @@ public class MapManager {
                 dynmapWorld.seedloc.add(new Location(w, (lim.x0+lim.x1)/2, 64, (lim.z0+lim.z1)/2));
             }            
         }
+        /* Load hidden limits, if any are defined */
+        List<ConfigurationNode> hidelimits = worldConfiguration.getNodes("hiddenlimits");
+        if(hidelimits != null) {
+            dynmapWorld.hidden_limits = new ArrayList<MapChunkCache.VisibilityLimit>();
+            for(ConfigurationNode vis : hidelimits) {
+                MapChunkCache.VisibilityLimit lim = new MapChunkCache.VisibilityLimit();
+                lim.x0 = vis.getInteger("x0", 0);
+                lim.x1 = vis.getInteger("x1", 0);
+                lim.z0 = vis.getInteger("z0", 0);
+                lim.z1 = vis.getInteger("z1", 0);
+                dynmapWorld.hidden_limits.add(lim);
+            }            
+        }
         String autogen = worldConfiguration.getString("autogenerate-to-visibilitylimits", "none");
         if(autogen.equals("permanent")) {
             dynmapWorld.do_autogenerate = AutoGenerateOption.PERMANENT;
@@ -614,9 +642,24 @@ public class MapManager {
         return invalidates;
     }
 
+    public int touchVolume(Location l0, Location l1) {
+        DynmapWorld world = getWorld(l0.getWorld().getName());
+        if (world == null)
+            return 0;
+        int invalidates = 0;
+        for (int i = 0; i < world.maps.size(); i++) {
+            MapTile[] tiles = world.maps.get(i).getTiles(l0, l1);
+            for (int j = 0; j < tiles.length; j++) {
+                invalidateTile(tiles[j]);
+                invalidates++;
+            }
+        }
+        return invalidates;
+    }
+
     public void invalidateTile(MapTile tile) {
-        Debug.debug("Invalidating tile " + tile.getFilename());
-        tileQueue.push(tile);
+        if(tileQueue.push(tile))
+            Debug.debug("Invalidating tile " + tile.getFilename());
     }
 
     public static void scheduleDelayedJob(Runnable job, long delay_in_msec) {
@@ -707,6 +750,13 @@ public class MapManager {
             c.setHiddenFillStyle(w.hiddenchunkstyle);
             c.setAutoGenerateVisbileRanges(w.do_autogenerate);
         }
+        if(w.hidden_limits != null) {
+            for(MapChunkCache.VisibilityLimit limit: w.hidden_limits) {
+                c.setHiddenRange(limit);
+            }
+            c.setHiddenFillStyle(w.hiddenchunkstyle);
+        }
+
         c.setChunks(w.world, chunks);
         if(c.setChunkDataTypes(blockdata, biome, highesty, rawbiome) == false)
             Log.severe("CraftBukkit build does not support biome APIs");
@@ -788,6 +838,7 @@ public class MapManager {
         sender.sendMessage("  TOTALS: processed=" + tot.loggedcnt + ", rendered=" + tot.renderedcnt + 
                            ", updated=" + tot.updatedcnt + ", transparent=" + tot.transparentcnt);
         sender.sendMessage("  Cache hit rate: " + sscache.getHitRate() + "%");
+        sender.sendMessage("  Triggered update queue size: " + tileQueue.size());
     }
     /**
      * Reset statistics

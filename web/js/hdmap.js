@@ -24,7 +24,8 @@ var HDMapType = DynmapTileLayer.extend({
 	options: {
 		minZoom: 0,
 		maxZoom: 0,
-		errorTileUrl: 'images/blank.png'
+		errorTileUrl: 'images/blank.png',
+		continuousWorld: true
 	},
 	initialize: function(options) {
 		options.maxZoom = options.mapzoomin + options.mapzoomout;
@@ -36,7 +37,7 @@ var HDMapType = DynmapTileLayer.extend({
 		// Y is inverted for HD-map.
 		info.y = -info.y;
 		info.scaledy = info.y >> 5;
-		return namedReplace('{prefix}{nightday}/{scaledx}_{scaledy}/{zoom}{x}_{y}.png', info);
+		return namedReplace('{prefix}{nightday}/{scaledx}_{scaledy}/{zoom}{x}_{y}.{fmt}', info);
 	},
 	zoomprefix: function(amount) {
 		// amount == 0 -> ''
